@@ -69,6 +69,18 @@ if(MINGW)
     endforeach()
 endif()
 
+if(BUILD_TESTING AND WIN32)
+    add_executable(windows_local_time_tests Time/WindowsLocalTimeTests.cpp)
+    target_include_directories(windows_local_time_tests PRIVATE ${LIBS_INCLUDE_DIR})
+    target_compile_features(windows_local_time_tests PRIVATE cxx_std_20)
+    target_compile_definitions(windows_local_time_tests PRIVATE _WIN32_WINNT=0x0602)
+    add_dependencies(windows_local_time_tests libkernel libc)
+    configure_windows_unwind(windows_local_time_tests)
+    add_test(NAME windows_local_time COMMAND windows_local_time_tests
+        "$<TARGET_FILE:libkernel>" "$<TARGET_FILE_DIR:libc>")
+    set_tests_properties(windows_local_time PROPERTIES ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
+endif()
 if(BUILD_TESTING)
     add_library(guest_module_fixture SHARED ${LIBS_INCLUDE_DIR}/tests/GuestModuleFixture.cpp)
     target_include_directories(guest_module_fixture PRIVATE ${LIBS_INCLUDE_DIR})

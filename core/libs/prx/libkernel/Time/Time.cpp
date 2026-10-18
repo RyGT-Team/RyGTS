@@ -24,6 +24,62 @@
 #include <sys/time.h>
 #endif
 
+#ifdef _WIN32
+namespace {
+constexpr std::int64_t WindowsEpochSeconds = 11644473600LL;
+struct WindowsLocalClock {
+    std::int64_t utc;
+    std::int64_t local;
+    std::int32_t standardOffset;
+    std::int32_t daylightOffset;
+};
+
+bool WindowsCalendar(std::int64_t seconds, SYSTEMTIME& calendar) {
+    // Bound the multiplication and reject dates outside Windows' FILETIME range.
+    if (seconds < -WindowsEpochSeconds || seconds > 922337203685LL - WindowsEpochSeconds) return false;
+    const auto ticks = static_cast<std::uint64_t>(seconds + WindowsEpochSeconds) * 10000000ULL;
+    const FILETIME file{static_cast<DWORD>(ticks), static_cast<DWORD>(ticks >> 32)};
+    return FileTimeToSystemTime(&file, &calendar) != FALSE;
+}
+
+bool WindowsSeconds(const SYSTEMTIME& calendar, std::int64_t& seconds) {
+    FILETIME file{};
+    if (!SystemTimeToFileTime(&calendar, &file)) return false;
+    const auto ticks = (static_cast<std::uint64_t>(file.dwHighDateTime) << 32) | file.dwLowDateTime;
+    seconds = static_cast<std::int64_t>(ticks / 10000000ULL) - WindowsEpochSeconds;
+    return true;
+}
+
+bool WindowsClockFromUtc(std::int64_t utc, WindowsLocalClock& result) {
+    DYNAMIC_TIME_ZONE_INFORMATION zone{};
+    if (GetDynamicTimeZoneInformation(&zone) == TIME_ZONE_ID_INVALID) return false;
+    SYSTEMTIME universal{}, local{};
+    if (!WindowsCalendar(utc, universal) || !SystemTimeToTzSpecificLocalTimeEx(&zone, &universal, &local)) return false;
+    TIME_ZONE_INFORMATION rules{};
+    if (!GetTimeZoneInformationForYear(local.wYear, &zone, &rules)) return false;
+    std::int64_t localSeconds{};
+    if (!WindowsSeconds(local, localSeconds)) return false;
+    const auto standard = static_cast<std::int32_t>(-(rules.Bias + rules.StandardBias) * 60);
+    result = {utc, localSeconds, standard, static_cast<std::int32_t>(localSeconds - utc - standard)};
+    return true;
+}
+
+bool WindowsClockFromLocal(std::int64_t local, WindowsLocalClock& result) {
+    DYNAMIC_TIME_ZONE_INFORMATION zone{};
+    if (GetDynamicTimeZoneInformation(&zone) == TIME_ZONE_ID_INVALID) return false;
+    SYSTEMTIME calendar{}, universal{};
+    std::int64_t utc{};
+    if (!WindowsCalendar(local, calendar) || !TzSpecificLocalTimeToSystemTimeEx(&zone, &calendar, &universal) ||
+        !WindowsSeconds(universal, utc)) return false;
+    return WindowsClockFromUtc(utc, result);
+}
+
+KernelTimezone WindowsGuestTimezone(const WindowsLocalClock& clock) {
+    // The guest ABI reports signed UTC-to-local minutes, plus DST minutes separately.
+    return {clock.standardOffset / 60, clock.daylightOffset / 60};
+}
+}
+#endif
 static std::uint64_t RawMonotonicNanos() {
 #ifdef _WIN32
     return TimedWait::NowNanos();
@@ -472,8 +528,14 @@ int APS5_VABI gettimeofday_nid_postfix(KernelTimeval* tv, KernelTimezone* tz) {
     tv->tv_usec = static_cast<std::int64_t>(native.tv_usec);
 #endif
     if (tz != nullptr) {
+#ifdef _WIN32
+        WindowsLocalClock clock{};
+        if (!WindowsClockFromUtc(tv->tv_sec, clock)) { errno = EINVAL; return -1; }
+        *tz = WindowsGuestTimezone(clock);
+#else
         tz->tz_minuteswest = 0;
         tz->tz_dsttime = 0;
+#endif
     }
     return 0;
 }
@@ -548,8 +610,7 @@ int APS5_VABI clock_getres_nid_postfix(int clockId, KernelTimespec* res) {
 // Moved as-is (not yet implemented) from the monolithic libkernel/Export.cpp.
 // ---------------------------------------------------------------------------
 
-// The sce* clock calls share the POSIX implementations above. The console clock is kept in UTC:
-// the time zone reported here and by gettimeofday has no offset and no daylight saving.
+// Wall-clock timestamps remain UTC. Windows local-time conversions follow the host time zone.
 static constexpr int SceKernelErrorEfault = static_cast<int>(0x8002000e);
 
 int APS5_VABI sceKernelClockGetres(KernelClockid clock_id, KernelTimespec* tp) {
@@ -564,16 +625,32 @@ int APS5_VABI sceKernelClockGettime(KernelClockid clock_id, KernelTimespec* tp) 
 
 int APS5_VABI sceKernelConvertLocaltimeToUtc(int64_t local_time, int64_t reserved, int64_t* utc_time, KernelTimezone* timezone, int32_t* dst_seconds) {
     (void)reserved;
+#ifdef _WIN32
+    WindowsLocalClock clock{};
+    if (!WindowsClockFromLocal(local_time, clock)) return static_cast<int>(0x80020016);
+    if (utc_time != nullptr) *utc_time = clock.utc;
+    if (timezone != nullptr) *timezone = WindowsGuestTimezone(clock);
+    if (dst_seconds != nullptr) *dst_seconds = clock.daylightOffset;
+#else
     if (utc_time != nullptr) *utc_time = local_time;
     if (timezone != nullptr) *timezone = {0, 0};
     if (dst_seconds != nullptr) *dst_seconds = 0;
+#endif
     return 0;
 }
 
 int APS5_VABI sceKernelConvertUtcToLocaltime(int64_t utc_time, int64_t* local_time, KernelTimesec* st, uint64_t* dst_sec) {
+#ifdef _WIN32
+    WindowsLocalClock clock{};
+    if (!WindowsClockFromUtc(utc_time, clock)) return static_cast<int>(0x80020016);
+    if (local_time != nullptr) *local_time = clock.local;
+    if (st != nullptr) *st = {utc_time, static_cast<std::uint32_t>(clock.standardOffset), static_cast<std::uint32_t>(clock.daylightOffset)};
+    if (dst_sec != nullptr) *dst_sec = static_cast<std::uint64_t>(clock.daylightOffset);
+#else
     if (local_time != nullptr) *local_time = utc_time;
     if (st != nullptr) *st = {utc_time, 0u, 0u};
     if (dst_sec != nullptr) *dst_sec = 0;
+#endif
     return 0;
 }
 
@@ -584,7 +661,12 @@ int APS5_VABI sceKernelGettimeofday(KernelTimeval* tp) {
 
 int APS5_VABI sceKernelGettimezone(KernelTimezone* tz) {
     if (tz == nullptr) return SceKernelErrorEfault;
+#ifdef _WIN32
+    KernelTimeval now{};
+    if (gettimeofday_nid_postfix(&now, tz) != 0) return static_cast<int>(0x80020016);
+#else
     *tz = {0, 0};
+#endif
     return 0;
 }
 
