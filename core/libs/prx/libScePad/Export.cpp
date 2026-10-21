@@ -150,7 +150,7 @@ int APS5_VABI scePadDeviceClassParseData(int handle, const PadData* data, PadDev
  class_data->deviceClass = PAD_DEVICE_CLASS_STEERING_WHEEL;
  class_data->dataValid = wheel.connected;
  class_data->classData.steeringWheel.angle = settings.angleRadians ? degrees * 0.017453292f : degrees;
- class_data->classData.steeringWheel.wheel = static_cast<std::uint16_t>(wheel.steering + 32768);
+ class_data->classData.steeringWheel.wheel = static_cast<std::uint16_t>(Pad::SteeringForGame(wheel.steering) + 32768);
  class_data->classData.steeringWheel.accelerator = pedal(wheel.throttle);
  class_data->classData.steeringWheel.brake = pedal(wheel.brake);
  class_data->classData.steeringWheel.clutch = pedal(wheel.clutch);
@@ -324,7 +324,7 @@ int APS5_VABI scePadReadStateExt(int handle, PadData* data) {
   const auto pedal = [](std::uint16_t value) {
    return static_cast<std::uint16_t>(0xffff - std::min<std::uint32_t>(0xffff, 3276u + static_cast<std::uint32_t>(value) * 62259u / 65535u));
   };
-  const auto steering = static_cast<std::uint16_t>(std::clamp(wheel.steering + 32768, 0, 65535));
+  const auto steering = static_cast<std::uint16_t>(std::clamp(Pad::SteeringForGame(wheel.steering) + 32768, 0, 65535));
   const std::uint16_t accelerator = pedal(wheel.throttle);
   const std::uint16_t brake = pedal(wheel.brake);
   data->device_unique_data_len = 12;
