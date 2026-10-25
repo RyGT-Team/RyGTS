@@ -92,6 +92,7 @@ and image tracking).
 
 - `main`: stable builds; releases come from here.
 - `development`: ongoing work. Changes reach `main` once they are tested.
+- 'shader_fixes': Fixing shader bugs.'
 
 ## Documentation
 
