@@ -183,6 +183,7 @@ More details: [docs/user/BUILDING.md](docs/user/BUILDING.md).
 
 - `main`: stable builds; releases come from here.
 - `development`: ongoing work. Changes reach `main` once they are tested.
+- 'shader_fixes': Fixing shader bugs.'
 
 # Discord Server
 Join our server for more updates: https://discord.gg/8dz4U9Nd8d
