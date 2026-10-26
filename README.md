@@ -14,7 +14,7 @@
 RyGT ports Gran Turismo Sport (CUSA03220, update 1.69) from PlayStation 4 to Windows. The game is
 not emulated: RyGT's converter turns the game's executable into `GTSport.exe`, the game code runs
 directly on your CPU, and RyGT's libraries stand in for the PS4 system. Graphics go through
-[shadGT](https://github.com/mlgprorektm8/shadGT/tree/ryty-gpu)'s Vulkan renderer, built as the
+[shadGT](https://gitlab.com/rygt-team/shadGT)'s Vulkan renderer, built as the
 game's video output library.
 
 RyGT is a fork of [Ryty](https://github.com/aarvsn/Ryty), the general PS4/PS5 porting tool, with
@@ -41,7 +41,7 @@ Tested on Windows 11 with an AMD Ryzen 5 9600X and an RTX 3060 12GB
 
 ## Download
 
-Get the latest build from [Releases](https://github.com/mlgprorektm8/RyGT/releases). A release
+Get the latest build from [Releases](https://gitlab.com/rygt-team/RyGT/-/releases). A release
 contains the runtime libraries, the renderer, the converter, a launcher and the GT Sport settings.
 It contains **no game files**: you need your own decrypted dump of GT Sport CUSA03220 with update
 1.69, and the system modules and fonts from your own PS4 firmware.
@@ -84,7 +84,7 @@ libs\  RyGT runtime libraries (kernel, libc, save data, audio, input, ...)
   installed separately (not in the releases).
 - **GT Sport guide** ([docs/gt-sport](docs/gt-sport)): setup from your own dump.
 
-The renderer lives in [shadGT, branch `ryty-gpu`](https://gitlab.com/rygt-team/shadGT/ryty-gpu)
+The renderer lives in [shadGT, branch `ryty-gpu`](https://gitlab.com/rygt-team/shadGT)
 (`ryty_gpu/`). It builds shadGT's video output, Gnm driver and Vulkan renderer as
 `libSceVideoOut.prx`, plus shadGT's audio, NP and other libraries for RyGT. It carries the GT
 Sport rendering fixes and the performance work (Vulkan calls on their own thread, cheaper buffer
