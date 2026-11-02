@@ -1,5 +1,5 @@
 {
   "repository": "https://gitlab.com/rygt-team/ShadGT.git",
-  "branch": "ryty-gpu",
-  "commit": "de5c80ad6d449edfd6264d8c732cbd2e51696174"
+  "branch": "feat/multi_thread_render",
+  "commit": "7d6b4aab84cdb01db3d815a41170c4c7e0931f23"
 }
