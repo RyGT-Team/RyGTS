@@ -360,10 +360,5 @@ int APS5_VABI sceKernelIsDevelopmentKit(void) {
     return 0;
 }
 
-std::uint64_t APS5_VABI sceKernelGetProcessTimeCounter(void) {
-    static const auto start = std::chrono::steady_clock::now();
-    const auto now = std::chrono::steady_clock::now();
-    return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(now - start).count());
-}
 
 }
