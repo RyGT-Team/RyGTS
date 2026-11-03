@@ -43,6 +43,7 @@ if(BUILD_TESTING)
             --output "${disk_store_methods}"
         DEPENDS core/shader/recompiler/tests/extract_disk_store_wait.py
             core/shader/recompiler/ShaderDiskCache.cpp VERBATIM)
+    add_custom_target(runtime_disk_store_wait_methods DEPENDS "${disk_store_methods}")
     foreach(mode IN ITEMS release debug)
         set(target runtime_diagnostic_headers_${mode})
         add_test_executable(${target} core/libs/tests/DiagnosticHeaders.cpp)
@@ -58,6 +59,7 @@ if(BUILD_TESTING)
         set(writer_target runtime_disk_store_wait_${mode})
         add_test_executable(${writer_target}
             core/shader/recompiler/tests/disk_store_wait_test.cpp "${disk_store_methods}")
+        add_dependencies(${writer_target} runtime_disk_store_wait_methods)
         target_include_directories(${writer_target} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
         target_compile_features(${writer_target} PRIVATE cxx_std_20)
         if(mode STREQUAL "release")
