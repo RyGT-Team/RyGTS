@@ -1,8 +1,8 @@
 Debug / Diagnostics
 
-This is an optimized RelWithDebInfo build with full matching symbols and extra
-capture instrumentation. It is not an unoptimized Debug build. This separate
-debug-ci archive contains the Debug runtime; the ci archive contains Release.
+The renderer uses an optimized Debug configuration with full matching symbols,
+capture instrumentation and the redistributable C++ runtime. The separate
+debug-ci archive contains Diagnostics; the ci archive contains Release.
 Extract them to different folders for independent settings, saves and caches;
 setup points each at your own game dump and firmware modules.
 
