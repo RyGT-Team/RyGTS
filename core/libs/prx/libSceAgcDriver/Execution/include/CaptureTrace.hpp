@@ -13,10 +13,15 @@
 
 namespace AgcDriver {
 
+#if !defined(NDEBUG)
 class CaptureTrace {
 public:
     static bool Enabled() {
+#if !defined(NDEBUG)
         static const bool enabled = std::getenv("APS5_CAPTURE_TRACE") != nullptr;
+#else
+        static constexpr bool enabled = false;
+#endif
         return enabled;
     }
 
@@ -91,5 +96,14 @@ private:
     bool stopping = false;
     bool flushRequested = false;
 };
+
+#else
+class CaptureTrace {
+public:
+    static constexpr bool Enabled() noexcept { return false; }
+    template<typename... TArgs>
+    static constexpr void Log(const char*, TArgs...) noexcept {}
+};
+#endif
 
 }

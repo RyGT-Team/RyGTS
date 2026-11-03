@@ -89,9 +89,17 @@ void Driver::flushBetweenPackets(std::uint32_t queue, std::uint32_t header, bool
         localDevice->ReapRecorded();
         ++boundaryReaps;
     }
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
 
+#if !defined(NDEBUG)
     static std::chrono::steady_clock::time_point lastReport = std::chrono::steady_clock::now();
+#else
+    static std::chrono::steady_clock::time_point lastReport{};
+#endif
     if (!profile) return;
     const auto reportNow = std::chrono::steady_clock::now();
     if (reportNow - lastReport < std::chrono::seconds(10)) return;

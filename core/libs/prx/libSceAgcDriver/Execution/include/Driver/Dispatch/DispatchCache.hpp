@@ -72,7 +72,11 @@ struct EntryCounters {
     std::set<std::size_t> differingPositions;
     std::size_t differingFirstPosition = std::numeric_limits<std::size_t>::max(), differingLastPosition = 0;
     std::map<std::uint64_t, std::uint64_t> differingByProgram;
+#if !defined(NDEBUG)
     std::chrono::steady_clock::time_point lastReport = std::chrono::steady_clock::now();
+#else
+    std::chrono::steady_clock::time_point lastReport{};
+#endif
 };
 
 struct DataMask {

@@ -24,7 +24,11 @@ void ShaderResources::prepareAddressBindings(std::span<const CompiledShader> sha
     }
     if (usesBda) {
         Require(context.bufferDeviceAddress, "buffer device address is not enabled");
+#if !defined(NDEBUG)
         static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+        static constexpr bool profile = false;
+#endif
         guestMemory.AcquireRegistered();
         const auto snapshotsStart = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
         for (const auto& snapshot : snapshots) guestMemory.AddSnapshot(snapshot);

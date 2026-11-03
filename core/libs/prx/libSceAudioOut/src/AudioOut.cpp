@@ -190,7 +190,11 @@ static const void* prepareBuffer(const Port& port, const void* data, std::vector
 
 // APS5_TRACE_AUDIOOUT: how loud each port is, to tell silence from sound without listening.
 static void traceLevel(Port& port, const void* data) {
+#if !defined(NDEBUG)
+
+#if !defined(NDEBUG)
     static const bool trace = std::getenv("APS5_TRACE_AUDIOOUT") != nullptr;
+#endif
     if (!trace || data == nullptr) {
         return;
     }
@@ -207,6 +211,7 @@ static void traceLevel(Port& port, const void* data) {
                      static_cast<int>(&port - g_ports) + 1, port.type, port.tracePeak);
         port.tracePeak = 0.0f;
     }
+#endif
 }
 
 static void queueAudio(Port& port, const void* data) {
@@ -358,8 +363,12 @@ int APS5_VABI sceAudioOutOpen(int userId, int type, int index, std::uint32_t len
             if (type != PORT_TYPE_VIBRATION) {
                 openDevice(port);
             }
+#if !defined(NDEBUG)
             static const bool trace = std::getenv("APS5_TRACE_AUDIOOUT") != nullptr;
+#endif
+#if !defined(NDEBUG)
             if (trace) std::fprintf(stderr, "[audioout] port %d: type %d, %u samples at %u Hz, format %d, device %u\n", i + 1, type, len, freq, static_cast<int>(format), static_cast<unsigned>(port.device));
+#endif
             return i + 1;
         }
     }
@@ -395,7 +404,9 @@ int APS5_VABI sceAudioOutOutput(int handle, const void* ptr) {
         nanosleep(&req, nullptr);
     }
 
+#if !defined(NDEBUG)
     traceLevel(*port, ptr);
+#endif
     queueAudio(*port, ptr);
     port->lastOutputTime = sceKernelGetProcessTime();
     return static_cast<int>(port->samplesNum);
@@ -445,7 +456,9 @@ int APS5_VABI sceAudioOutOutputs(AudioOutOutputParam* param, std::uint32_t num) 
 
     for (std::uint32_t i = 0; i < num; i++) {
         if (auto* port = getPort(param[i].handle)) {
+#if !defined(NDEBUG)
             traceLevel(*port, param[i].ptr);
+#endif
             queueAudio(*port, param[i].ptr);
         }
     }

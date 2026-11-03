@@ -54,7 +54,11 @@ bool sameRanges(const std::vector<ShaderRecompiler::BdaAbi::Range>& left, const 
 // APS5_PROFILE_DRAW: why the most recently used entry did not serve this build (see
 // TableCacheStats). Under the cache mutex.
 void classifyFirstEntry(TableCache& cache, std::uint64_t hash, const std::vector<ShaderRecompiler::BdaAbi::Range>& ranges) {
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     if (!profile) return;
     auto& classes = cache.classes;
     if (cache.entries.empty()) {

@@ -27,6 +27,12 @@
 #include <sstream>
 #endif
 
+#if !defined(NDEBUG)
+#define AGC_DIAGNOSTIC(...) __VA_ARGS__
+#else
+#define AGC_DIAGNOSTIC(...) ((void)0)
+#endif
+
 namespace AgcDriver::GuestMemory {
 namespace {
 void require(bool condition, const char* reason) {
@@ -273,7 +279,11 @@ void CountWriteCaller(const void* returnAddress) {
 }
 
 bool MemoryProfiled() {
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     return profile;
 }
 
@@ -434,8 +444,8 @@ std::size_t ImagePagesSize() {
 }
 
 void ForgetPages(std::uintptr_t address, std::size_t bytes) {
-    forgetCalls.fetch_add(1, std::memory_order_relaxed);
-    forgetBytes.fetch_add(bytes, std::memory_order_relaxed);
+    AGC_DIAGNOSTIC(forgetCalls.fetch_add(1, std::memory_order_relaxed));
+    AGC_DIAGNOSTIC(forgetBytes.fetch_add(bytes, std::memory_order_relaxed));
     forgetSerial.fetch_add(1, std::memory_order_release);
     Pages().forget(address, bytes);
     forgetSerial.fetch_add(1, std::memory_order_release);
@@ -495,14 +505,22 @@ bool describePages(std::uintptr_t address, std::size_t bytes, Emit&& emit) {
 #ifdef _WIN32
         const TimedAccess timed(CounterQuery, 0);
         MEMORY_BASIC_INFORMATION memory{};
+#if !defined(NDEBUG)
         const auto queryStart = std::chrono::steady_clock::now();
+#else
+        constexpr std::chrono::steady_clock::time_point queryStart{};
+#endif
         // A mutation that changes these pages while they are being queried bumps the generation
         // before it invalidates, so a generation change across the query and the store below means
         // the stored pages may describe the old state and are forgotten again.
         const auto generation = GuestAllocations::GuestAllocationsGeneration_nid_postfix();
         if (VirtualQuery(reinterpret_cast<const void*>(cursor), &memory, sizeof(memory)) != sizeof(memory)) return false;
         // Debug aid: APS5_TRACE_QUERY prints every 16th page query with its cost.
+#if !defined(NDEBUG)
         static const bool traceQuery = std::getenv("APS5_TRACE_QUERY") != nullptr;
+#else
+        static constexpr bool traceQuery = false;
+#endif
         if (traceQuery) {
             static std::atomic<std::uint32_t> queries{0};
             if (queries.fetch_add(1) % 16 == 0) {
@@ -587,7 +605,11 @@ void CheckRange(const void* pointer, std::size_t bytes, std::size_t alignment, b
     const auto reason = verify(address, bytes, writable);
     if (!reason.empty()) {
         // Debug aid: APS5_TRACE_UNREADABLE names the code that checked an inaccessible range.
+#if !defined(NDEBUG)
         static const bool trace = std::getenv("APS5_TRACE_UNREADABLE") != nullptr;
+#else
+        static constexpr bool trace = false;
+#endif
         if (trace) std::fprintf(stderr, "[unreadable] %s from +0x%llx\n", reason.c_str(), ModuleOffset(__builtin_return_address(0)));
         require(false, reason.c_str());
     }
@@ -760,14 +782,18 @@ WriteTracker& Tracker() {
 // Takes the tracker mutex; under APS5_PROFILE_DRAW an acquisition that found it held is counted
 // ('tracker waits N / M' in [guestmem]), which says whether walking outside the lock would pay.
 std::unique_lock<std::mutex> lockTracker(WriteTracker& tracker) {
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     if (!profile) return std::unique_lock(tracker.mutex);
     std::unique_lock lock(tracker.mutex, std::try_to_lock);
     if (!lock.owns_lock()) {
-        trackerWaits.fetch_add(1, std::memory_order_relaxed);
+        AGC_DIAGNOSTIC(trackerWaits.fetch_add(1, std::memory_order_relaxed));
         lock.lock();
     }
-    trackerAcquisitions.fetch_add(1, std::memory_order_relaxed);
+    AGC_DIAGNOSTIC(trackerAcquisitions.fetch_add(1, std::memory_order_relaxed));
     return lock;
 }
 
@@ -815,7 +841,7 @@ void stampWrittenRun(void* context, std::uintptr_t begin, std::uintptr_t end) {
     if (end <= begin) return;
     const auto generation = tracker.generation.load(std::memory_order_relaxed);
     for (auto block = tracker.blockOf(begin); block <= tracker.blockOf(end - 1); ++block) tracker.stamp(block, generation, kind);
-    collectDirtyRuns.fetch_add(1, std::memory_order_relaxed);
+    AGC_DIAGNOSTIC(collectDirtyRuns.fetch_add(1, std::memory_order_relaxed));
 }
 #endif
 
@@ -842,7 +868,7 @@ bool walkWrites(WriteTracker& tracker, std::uint64_t first, std::uint64_t stop, 
         if (count < tracker.pages.size()) break;
         cursor = reinterpret_cast<std::uintptr_t>(tracker.pages[count - 1]) + (granularity != 0 ? granularity : page);
     }
-    if (dirty) collectDirty.fetch_add(1, std::memory_order_relaxed);
+    if (dirty) AGC_DIAGNOSTIC(collectDirty.fetch_add(1, std::memory_order_relaxed));
     if (dirty && !singlePass) {
         // The resetting pass reports pages again, so a write racing the first pass is stamped too.
         cursor = first;
@@ -860,7 +886,7 @@ bool walkWrites(WriteTracker& tracker, std::uint64_t first, std::uint64_t stop, 
     const auto dirtyRuns = collectDirtyRuns.load(std::memory_order_relaxed);
     StampRuns runs{tracker, kind};
     const bool complete = GuestWriteWatch::GuestWriteWatchCollect_nid_postfix(static_cast<std::uintptr_t>(first), static_cast<std::size_t>(stop - first), &stampWrittenRun, &runs);
-    if (collectDirtyRuns.load(std::memory_order_relaxed) != dirtyRuns) collectDirty.fetch_add(1, std::memory_order_relaxed);
+    if (collectDirtyRuns.load(std::memory_order_relaxed) != dirtyRuns) AGC_DIAGNOSTIC(collectDirty.fetch_add(1, std::memory_order_relaxed));
     return complete;
 #endif
 }
@@ -884,7 +910,7 @@ std::uint64_t collectWrites(std::uint64_t address, std::size_t bytes, bool memoi
                 // The current generation, not the memoized one: blocks stamped since (MarkWritten, an
                 // overlapping collect) were written before this caller reads, and an older value would
                 // make every later UnchangedSince fail until the epoch ends.
-                collectMemoHits.fetch_add(1, std::memory_order_relaxed);
+                AGC_DIAGNOSTIC(collectMemoHits.fetch_add(1, std::memory_order_relaxed));
                 return tracker.generation.load(std::memory_order_relaxed);
             }
         }
@@ -896,7 +922,7 @@ std::uint64_t collectWrites(std::uint64_t address, std::size_t bytes, bool memoi
     if (useMemo && sharedCollectMemo()) {
         for (const auto& entry : tracker.memo) {
             if (entry.epoch == epoch && entry.unwatched == unwatchSerial.load(std::memory_order_relaxed) && entry.begin <= cursor && stop <= entry.end) {
-                collectMemoHits.fetch_add(1, std::memory_order_relaxed);
+                AGC_DIAGNOSTIC(collectMemoHits.fetch_add(1, std::memory_order_relaxed));
                 return tracker.generation;
             }
         }
@@ -924,7 +950,7 @@ std::uint64_t CollectWritesUncached(std::uint64_t address, std::size_t bytes) {
 
 void BumpCollectEpoch() {
     threadCollectEpoch = nextCollectEpoch.fetch_add(1, std::memory_order_relaxed) + 1;
-    collectEpochBumps.fetch_add(1, std::memory_order_relaxed);
+    AGC_DIAGNOSTIC(collectEpochBumps.fetch_add(1, std::memory_order_relaxed));
 }
 
 std::uint64_t CollectEpochBumps() {
@@ -1155,7 +1181,11 @@ struct GpuLockStats {
     std::uint64_t triesFailed = 0;
     std::uint64_t lockedGpuWaits = 0;
     double lockedGpuWaitMs = 0;
+#if !defined(NDEBUG)
     std::chrono::steady_clock::time_point lastReport = std::chrono::steady_clock::now();
+#else
+    std::chrono::steady_clock::time_point lastReport{};
+#endif
 };
 
 GpuLockStats& LockStats() {
@@ -1164,7 +1194,11 @@ GpuLockStats& LockStats() {
 }
 
 bool GpuLockProfiled() {
+#if !defined(NDEBUG)
     static const bool profiled = std::getenv("APS5_PROFILE_DRAW") != nullptr && std::getenv("APS5_NO_LOCK_PROFILE") == nullptr;
+#else
+    static constexpr bool profiled = false;
+#endif
     return profiled;
 }
 
@@ -1445,7 +1479,11 @@ void Read(std::uint64_t address, std::span<std::byte> destination, std::size_t a
     try {
         CheckRange(source, destination.size(), alignment);
     } catch (const std::runtime_error&) {
+#if !defined(NDEBUG)
         static const bool trace = std::getenv("APS5_TRACE_UNREADABLE") != nullptr;
+#else
+        static constexpr bool trace = false;
+#endif
         if (trace) std::fprintf(stderr, "[unreadable]   read from +0x%llx\n", ModuleOffset(__builtin_return_address(0)));
         throw;
     }
@@ -1573,3 +1611,5 @@ void Write(std::uint64_t address, std::span<const std::byte> source, std::size_t
 extern "C" void AgcDriverCheckGuestMemory_nid_postfix(const void* pointer, std::size_t bytes, std::size_t alignment, bool writable) {
     AgcDriver::GuestMemory::CheckRange(pointer, bytes, alignment, writable);
 }
+
+#undef AGC_DIAGNOSTIC

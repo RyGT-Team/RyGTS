@@ -15,13 +15,21 @@ struct WorkerProfile {
     double dispatchMs = 0;
     double drawMs = 0;
     double waitMs = 0;
+#if !defined(NDEBUG)
     std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+#else
+    std::chrono::steady_clock::time_point start{};
+#endif
     std::chrono::steady_clock::time_point reported = start;
 };
 
 struct PacketProfile {
     std::map<std::uint32_t, std::pair<std::uint64_t, double>> byOpcode;
+#if !defined(NDEBUG)
     std::chrono::steady_clock::time_point lastReport = std::chrono::steady_clock::now();
+#else
+    std::chrono::steady_clock::time_point lastReport{};
+#endif
     std::uint64_t submissions = 0;
 
     double flushMs = 0;

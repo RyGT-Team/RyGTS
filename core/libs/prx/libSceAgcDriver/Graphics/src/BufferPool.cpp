@@ -57,12 +57,20 @@ BufferPool::Tier& BufferPool::tierFor(std::size_t capacity, VkMemoryPropertyFlag
 }
 
 std::optional<BufferAllocation> BufferPool::Take(std::size_t bytes, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties) {
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     const auto capacity = Capacity(bytes);
     std::lock_guard lock(mutex);
     ++clock;
     if (profile) {
+#if !defined(NDEBUG)
         static auto lastReport = std::chrono::steady_clock::now();
+#else
+        static std::chrono::steady_clock::time_point lastReport{};
+#endif
         const auto now = std::chrono::steady_clock::now();
         if (now - lastReport > std::chrono::seconds(10)) {
             lastReport = now;

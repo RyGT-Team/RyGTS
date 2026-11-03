@@ -858,6 +858,7 @@ bool AtomicZeroSkipEnabled() {
 // previous line (the first line 10 s after the first site), so it lags the true totals until the
 // next compile that emits a buffer atomic; the last sites of a run may never be printed.
 void NoteBufferAtomicSite(bool zeroSkip, bool zeroLoad) {
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
     if (!profile) return;
     static std::atomic<std::uint64_t> plain{0}, skipped{0}, loads{0};
@@ -872,6 +873,7 @@ void NoteBufferAtomicSite(bool zeroSkip, bool zeroLoad) {
     }
     if (now - last < 10 || !lastReport.compare_exchange_strong(last, now)) return;
     std::fprintf(stderr, "[recompile] buffer atomic sites: %llu plain, %llu zero-skipped (unused result), %llu zero-load\n", static_cast<unsigned long long>(plain.load()), static_cast<unsigned long long>(skipped.load()), static_cast<unsigned long long>(loads.load()));
+#endif
 }
 
 std::uint32_t Atomic32(SpirvValueEmitContext& ctx, const IrValue& inst, const MemoryInfo& mem) {

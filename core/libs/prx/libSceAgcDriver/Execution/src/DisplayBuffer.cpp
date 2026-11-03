@@ -88,7 +88,11 @@ std::vector<std::byte> DecodeDisplayBuffer(const DisplayBuffer& buffer, std::spa
 
 std::vector<std::byte> ReadDisplayBuffer(const DisplayBuffer& buffer) {
     const auto size = DisplayBufferSize(buffer);
+#if !defined(NDEBUG)
     static const bool traceGpu = std::getenv("APS5_TRACE_GPU") != nullptr;
+#else
+    static constexpr bool traceGpu = false;
+#endif
     if (traceGpu) {
         static const auto start = std::chrono::steady_clock::now();
         std::fprintf(stderr, "[gpu] scanout display buffer 0x%llx %ux%u format 0x%016llx at %.1f s\n", static_cast<unsigned long long>(buffer.address), buffer.width, buffer.height, static_cast<unsigned long long>(buffer.pixelFormat), std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());

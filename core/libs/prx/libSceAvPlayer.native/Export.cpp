@@ -227,22 +227,30 @@ struct Decoder {
     };
     std::deque<Packet> videoPackets, audioPackets;
     bool readerDone = false, videoDone = false, audioDone = false;
+#if !defined(NDEBUG)
     std::uint64_t framesDecoded = 0;
+#endif
     // Audio clock: the timestamp of the last audio block the title took, and when. Video is shown against it,
     // so pictures follow the sound the title is playing rather than wall time (the decoder can only run as far
     // ahead as the title takes audio; against wall time, video fell behind and most frames were skipped).
     bool audioClock = false;
     std::uint64_t audioTs = 0;
     std::chrono::steady_clock::time_point audioAt{};
+#if !defined(NDEBUG)
     // Statistics (logged every 2 s while playing).
     std::uint64_t statDecodeUs = 0, statStoreUs = 0, statWaitUs = 0, statFrames = 0;
     std::atomic<std::uint64_t> statDelivered{0}, statSkipped{0}, statMissed{0};
     std::chrono::steady_clock::time_point statSince = std::chrono::steady_clock::now();
+#endif
 };
 
 std::uint64_t MicrosSince(std::chrono::steady_clock::time_point t) {
+#if !defined(NDEBUG)
     return static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t).count());
+#else
+    return 0;
+#endif
 }
 
 struct Player {
@@ -286,10 +294,12 @@ Player* Check(void* handle) {
 // The callback runs guest code and may re-enter the player, so it is always invoked without the player lock held.
 void Fire(Player* p, std::int32_t event, void* data = nullptr) {
     if (p->callback == nullptr) return;
+#if !defined(NDEBUG)
     static std::atomic<unsigned> fired[64];
     const auto slot = static_cast<unsigned>(event) < 64 ? static_cast<unsigned>(event) : 0u;
     if (fired[slot].fetch_add(1) < 3)
         std::fprintf(stderr, "[AVP] event 0x%02x\n", event);
+#endif
     p->callback(p->eventObject, event, 0, data);
 }
 
@@ -309,7 +319,9 @@ void* APS5_VABI AsyncEventRunner(void* arg) {
 }
 void FireAsync(Player* p, std::int32_t event) {
     if (p->callback == nullptr) return;
+#if !defined(NDEBUG)
     std::fprintf(stderr, "[AVP] event 0x%02x (from its own thread)\n", event);
+#endif
     auto* e = new AsyncEvent{p->callback, p->eventObject, event};
     Pthread thread{};
     if (scePthreadCreate(&thread, nullptr, AsyncEventRunner, e, "AvPlayerEvent") != 0) {
@@ -555,13 +567,21 @@ bool DecodePacket(Decoder* d, AVCodecContext* codec, const AVPacket* packet, boo
     if (avcodec_send_packet(codec, packet) < 0 && packet != nullptr) return true; // skip a bad packet
     AVFrame* frame = av_frame_alloc();
     bool keepGoing = true;
+#if !defined(NDEBUG)
     auto start = std::chrono::steady_clock::now();
+#endif
     while (avcodec_receive_frame(codec, frame) >= 0) {
+#if !defined(NDEBUG)
         if (video) d->statDecodeUs += MicrosSince(start);
+#endif
         auto& pool = video ? d->freeVideo : d->freeAudio;
+#if !defined(NDEBUG)
         const auto waitStart = std::chrono::steady_clock::now();
+#endif
         std::uint8_t* buffer = TakeBuffer(d, pool);
+#if !defined(NDEBUG)
         if (video) d->statWaitUs += MicrosSince(waitStart);
+#endif
         if (buffer == nullptr) { keepGoing = false; break; }
         Frame out;
         out.data = buffer;
@@ -569,10 +589,16 @@ bool DecodePacket(Decoder* d, AVCodecContext* codec, const AVPacket* packet, boo
         out.timestamp = FrameMillis(*frame, tb) + offsetMs;
         bool ok;
         if (video) {
+#if !defined(NDEBUG)
             const auto storeStart = std::chrono::steady_clock::now();
+#endif
             ok = StoreVideo(d, *frame, buffer);
+#if !defined(NDEBUG)
             d->statStoreUs += MicrosSince(storeStart);
+#endif
+#if !defined(NDEBUG)
             ++d->statFrames;
+#endif
             out.bytes = static_cast<std::uint32_t>(d->frameBytes);
         } else {
             out.bytes = StoreAudio(d, *frame, buffer);
@@ -584,9 +610,13 @@ bool DecodePacket(Decoder* d, AVCodecContext* codec, const AVPacket* packet, boo
             continue;
         }
         (video ? d->video : d->audio).push_back(out);
+#if !defined(NDEBUG)
         if (video) ++d->framesDecoded;
+#endif
         d->cv.notify_all();
+#if !defined(NDEBUG)
         start = std::chrono::steady_clock::now();
+#endif
     }
     av_frame_free(&frame);
     return keepGoing;
@@ -661,6 +691,7 @@ void* APS5_VABI ReaderThread(void* arg) {
             d->cv.notify_all();
             break;
         }
+#if !defined(NDEBUG)
         if (MicrosSince(d->statSince) >= 2000000) {
             const double frames = static_cast<double>(std::max<std::uint64_t>(d->statFrames, 1));
             std::fprintf(stderr, "[AVP] 2 s: %llu frames decoded (decode %.1f ms, convert %.1f ms each), "
@@ -674,6 +705,7 @@ void* APS5_VABI ReaderThread(void* arg) {
             d->statDecodeUs = d->statStoreUs = d->statWaitUs = d->statFrames = 0;
             d->statSince = std::chrono::steady_clock::now();
         }
+#endif
         std::lock_guard lk(d->mutex);
         if (packet->stream_index == d->videoIndex && d->videoCodec != nullptr)
             d->videoPackets.push_back({packet, loop});
@@ -874,7 +906,9 @@ bool DeliverDecodedFrame(Player& p, void*& data, std::uint64_t& timestamp) {
     const std::uint64_t now = MediaTime(p);
     std::lock_guard lk(d->mutex);
     if (d->video.empty()) {
+#if !defined(NDEBUG)
         ++d->statMissed;
+#endif
         return false;
     }
     Frame next = d->video.front();
@@ -884,14 +918,18 @@ bool DeliverDecodedFrame(Player& p, void*& data, std::uint64_t& timestamp) {
     d->video.pop_front();
     while (!d->video.empty() && d->video.front().timestamp <= now && next.timestamp + 50 < now) {
         d->freeVideo.push_back(next.data);
+#if !defined(NDEBUG)
         ++d->statSkipped;
+#endif
         next = d->video.front();
         d->video.pop_front();
     }
     if (d->haveCurrentVideo) d->freeVideo.push_back(d->currentVideo.data);
     d->currentVideo = next;
     d->haveCurrentVideo = true;
+#if !defined(NDEBUG)
     ++d->statDelivered;
+#endif
     d->cv.notify_all();
     data = next.data;
     timestamp = next.timestamp;
@@ -934,6 +972,7 @@ Bool PollVideo(Player* p, void* frame_info, bool extended) {
 }
 
 void LogLifecycleCall(const char* site, Player* p) {
+#if !defined(NDEBUG)
     std::ostringstream tid;
     tid << std::this_thread::get_id();
     std::lock_guard g(p->lock);
@@ -941,6 +980,7 @@ void LogLifecycleCall(const char* site, Player* p) {
         site, static_cast<void*>(p), tid.str().c_str(), p->playing ? 1 : 0, p->paused ? 1 : 0,
         p->stopFired ? 1 : 0, p->haveSource ? 1 : 0, p->decoder != nullptr ? 1 : 0);
     std::fflush(stderr);
+#endif
 }
 
 Player* CreateFrom(const Replacements* r, std::int32_t numFramebuffers, bool autoStart) {
@@ -1074,6 +1114,7 @@ int AddSourceCommon(Player* p, const char* path) {
 
 // RYGT_AVP_TRACE=1: every call (polls are counted and summed up once a second).
 static void Trace(const char* name) {
+#if !defined(NDEBUG)
     static const bool on = [] {
         const char* env = std::getenv("RYGT_AVP_TRACE");
         return env && env[0] == '1';
@@ -1101,6 +1142,7 @@ static void Trace(const char* name) {
         std::fprintf(stderr, "[AVPTRACE] polls in 1 s:%s\n", line.c_str());
     }
     std::fflush(stderr);
+#endif
 }
 
 extern "C" {

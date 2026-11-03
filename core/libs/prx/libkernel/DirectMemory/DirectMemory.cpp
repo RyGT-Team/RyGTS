@@ -205,6 +205,7 @@ int LinuxProtFromSce(int prot) {
     return result;
 }
 
+#if !defined(NDEBUG)
 bool TraceEnabled() {
     static const bool enabled = std::getenv("APS5_TRACE_MEMORY") != nullptr;
     return enabled;
@@ -220,6 +221,9 @@ void Trace(const char* format, ...) {
     va_end(args);
 }
 
+#else
+#define Trace(...) ((void)0)
+#endif
 class PhysicalBacking {
 public:
     explicit PhysicalBacking(std::size_t bytes, int memoryType) : memoryType(memoryType) {

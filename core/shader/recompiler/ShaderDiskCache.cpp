@@ -604,22 +604,32 @@ public:
     [[nodiscard]] const std::filesystem::path& Directory() const { return directory; }
 
     bool Load(std::span<const std::byte> key, CompiledVariant& variant) {
+#if !defined(NDEBUG)
         const auto started = std::chrono::steady_clock::now();
+#endif
         const auto name = EntryName(key);
         thread_local std::vector<std::byte> file;
         bool loaded = false;
         if (!ReadWholeFile(directory / name, file)) {
+#if !defined(NDEBUG)
             misses.fetch_add(1, std::memory_order_relaxed);
+#endif
         } else {
             switch (DecodeEntry(file, key, variant)) {
                 case LoadStatus::Loaded:
+#if !defined(NDEBUG)
                     hits.fetch_add(1, std::memory_order_relaxed);
+#endif
+#if !defined(NDEBUG)
                     bytesRead.fetch_add(file.size(), std::memory_order_relaxed);
+#endif
                     loaded = true;
                     break;
                 case LoadStatus::Absent:
                 case LoadStatus::KeyMismatch:
+#if !defined(NDEBUG)
                     misses.fetch_add(1, std::memory_order_relaxed);
+#endif
                     break;
                 case LoadStatus::Rejected: {
                     const auto failures = loadFailures.fetch_add(1, std::memory_order_relaxed);
@@ -629,7 +639,9 @@ public:
             }
         }
         if (file.capacity() > (4u << 20u)) std::vector<std::byte>().swap(file);
+#if !defined(NDEBUG)
         loadNanoseconds.fetch_add(static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count()), std::memory_order_relaxed);
+#endif
         report(false);
         return loaded;
     }
@@ -649,13 +661,23 @@ public:
 
     Counters Totals() const {
         Counters counters;
+#if !defined(NDEBUG)
         counters.hits = hits.load(std::memory_order_relaxed);
+#endif
+#if !defined(NDEBUG)
         counters.misses = misses.load(std::memory_order_relaxed);
+#endif
+#if !defined(NDEBUG)
         counters.writes = writes.load(std::memory_order_relaxed);
+#endif
         counters.loadFailures = loadFailures.load(std::memory_order_relaxed);
         counters.writeFailures = writeFailures.load(std::memory_order_relaxed);
+#if !defined(NDEBUG)
         counters.bytesRead = bytesRead.load(std::memory_order_relaxed);
+#endif
+#if !defined(NDEBUG)
         counters.bytesWritten = bytesWritten.load(std::memory_order_relaxed);
+#endif
         return counters;
     }
 
@@ -666,11 +688,17 @@ private:
     };
 
     void run() {
+#if !defined(NDEBUG)
         std::fprintf(stderr, "[shader-disk-cache] %s (source version %s, format %u)\n", directory.string().c_str(), hex(SourceVersion()).c_str(), FormatVersion);
+#endif
         housekeeping();
         std::unique_lock lock(mutex);
         while (true) {
+#if !defined(NDEBUG)
             wake.wait_for(lock, std::chrono::seconds(10), [&] { return !jobs.empty(); });
+#else
+            wake.wait(lock, [&] { return !jobs.empty(); });
+#endif
             while (!jobs.empty()) {
                 auto job = std::move(jobs.front());
                 jobs.pop_front();
@@ -691,8 +719,12 @@ private:
     void write(const Job& job) {
         const auto file = EncodeEntry(job.key, *job.variant);
         if (WriteFileAtomically(directory / EntryName(job.key), file)) {
+#if !defined(NDEBUG)
             writes.fetch_add(1, std::memory_order_relaxed);
+#endif
+#if !defined(NDEBUG)
             bytesWritten.fetch_add(file.size(), std::memory_order_relaxed);
+#endif
         } else {
             const auto failures = writeFailures.fetch_add(1, std::memory_order_relaxed);
             if (failures < 4) std::fprintf(stderr, "[shader-disk-cache] cannot write %s\n", (directory / EntryName(job.key)).string().c_str());
@@ -730,6 +762,7 @@ private:
     }
 
     void report(bool force) {
+#if !defined(NDEBUG)
         const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
         auto last = lastReport.load(std::memory_order_relaxed);
         if (last == 0) {
@@ -748,6 +781,7 @@ private:
                      static_cast<unsigned long long>(totals.hits), static_cast<unsigned long long>(totals.misses), static_cast<unsigned long long>(totals.writes));
         reported = totals;
         reportedLoadNs = loadNs;
+#endif
     }
 
     std::filesystem::path root;

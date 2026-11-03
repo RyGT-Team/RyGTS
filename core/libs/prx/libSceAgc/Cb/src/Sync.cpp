@@ -53,7 +53,11 @@ std::uint32_t* APS5_VABI sceAgcCbReleaseMem(CommandBuffer* buf, std::uint8_t act
     }
     const auto eventIndex = action >= 0x2fu ? 6u : 5u;
     auto* packet = Agc::Command::Emit(buf, 0x49u, {action | (eventIndex << 8u) | (control << 12u) | (static_cast<std::uint32_t>(cachePolicy) << 25u), (static_cast<std::uint32_t>(dst) << 16u) | (static_cast<std::uint32_t>(interrupt) << 24u) | (static_cast<std::uint32_t>(dataSelect) << 29u), static_cast<std::uint32_t>(guestAddress), static_cast<std::uint32_t>(guestAddress >> 32u), static_cast<std::uint32_t>(value), static_cast<std::uint32_t>(value >> 32u), interruptContextId}, __func__);
+#if !defined(NDEBUG)
     static const std::uint64_t traced = [] { const char* value = std::getenv("APS5_TRACE_LABEL"); return value ? std::strtoull(value, nullptr, 16) : 0ull; }();
+#else
+    static const std::uint64_t traced = {};
+#endif
     if (traced != 0 && guestAddress == traced) std::fprintf(stderr, "[agc] RELEASE_MEM for 0x%llx recorded at %p"  "\n", static_cast<unsigned long long>(guestAddress), static_cast<void*>(packet));
     return packet;
 }

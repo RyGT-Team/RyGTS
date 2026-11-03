@@ -30,8 +30,12 @@ constexpr std::uint32_t NoRemap = std::numeric_limits<std::uint32_t>::max();
 std::atomic<std::uint64_t> specializationNanoseconds{0};
 
 bool MaterializeProfiled() {
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
     return profile;
+#else
+    return false;
+#endif
 }
 
 struct DecodedImage {
@@ -199,8 +203,12 @@ std::uint32_t MaterialScanLimit() {
 }
 
 bool BindlessTraced() {
+#if !defined(NDEBUG)
     static const bool traced = std::getenv("APS5_TRACE_BINDLESS") != nullptr;
     return traced;
+#else
+    return false;
+#endif
 }
 
 struct BindlessCounters {
@@ -226,8 +234,11 @@ BindlessCounters& bindlessCounters() {
 }
 
 void reportBindless() {
+#if !defined(NDEBUG)
     if (!MaterializeProfiled()) return;
+#if !defined(NDEBUG)
     auto& counters = bindlessCounters();
+#endif
     const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
     auto last = counters.lastReport.load(std::memory_order_relaxed);
     if (last == 0) {
@@ -250,6 +261,7 @@ void reportBindless() {
         static_cast<unsigned long long>(tables), static_cast<unsigned long long>(material), static_cast<unsigned long long>(whole), ResourceMaterializer::BindlessSlots(), tables != 0 ? static_cast<double>(keys) / static_cast<double>(tables) : 0.0,
         static_cast<unsigned long long>(counters.paddedNull.exchange(0, std::memory_order_relaxed)), static_cast<unsigned long long>(counters.paddedShape.exchange(0, std::memory_order_relaxed)), static_cast<unsigned long long>(counters.paddedConversion.exchange(0, std::memory_order_relaxed)), static_cast<unsigned long long>(counters.outOfRange.exchange(0, std::memory_order_relaxed)),
         static_cast<unsigned long long>(rejected[0]), static_cast<unsigned long long>(rejected[1]), static_cast<unsigned long long>(rejected[2]), static_cast<unsigned long long>(rejected[3]), static_cast<unsigned long long>(rejected[4]), static_cast<unsigned long long>(rejected[5]));
+#endif
 }
 
 // A bindless image table's bound slots and its (key, slot) mapping, keys ascending. Slots the
@@ -302,7 +314,9 @@ void resolveTableImage(const IrResourcePlan& plan, std::uint32_t imageIndex, con
         }
     };
 
+#if !defined(NDEBUG)
     auto& counters = bindlessCounters();
+#endif
     std::vector<std::uint32_t> keys;
     bool materialMode = false;
     std::uint32_t materialEntries = 0;
@@ -323,7 +337,9 @@ void resolveTableImage(const IrResourcePlan& plan, std::uint32_t imageIndex, con
                 std::uint32_t key = 0;
                 readWord(materialBase + offset, key);
                 if (key >= entries) {
+#if !defined(NDEBUG)
                     outOfRange++;
+#endif
                     continue;
                 }
                 keys.push_back(key);
@@ -342,7 +358,9 @@ void resolveTableImage(const IrResourcePlan& plan, std::uint32_t imageIndex, con
         keys.resize(entries);
         for (std::uint32_t key = 0; key < entries; key++) keys[key] = key;
     }
+#if !defined(NDEBUG)
     counters.outOfRange.fetch_add(outOfRange, std::memory_order_relaxed);
+#endif
     if (keys.empty()) {
         rejectTable(BindlessRejection::NoEntry, "bindless image table selects no entry");
     }
@@ -371,15 +389,21 @@ void resolveTableImage(const IrResourcePlan& plan, std::uint32_t imageIndex, con
             }
         }
         if (!usable) {
+#if !defined(NDEBUG)
             paddedNull++;
+#endif
             continue;
         }
         if (decoded.conversionFormat != IrBufferFormat::Invalid || decoded.fmask) {
+#if !defined(NDEBUG)
             paddedConversion++;
+#endif
             continue;
         }
         if (shape.has_value() && (decoded.numericClass != shape->numericClass || decoded.dimension != shape->dimension || decoded.cube != shape->cube)) {
+#if !defined(NDEBUG)
             paddedShape++;
+#endif
             continue;
         }
         if (!shape.has_value()) shape = decoded;
@@ -401,12 +425,14 @@ void resolveTableImage(const IrResourcePlan& plan, std::uint32_t imageIndex, con
     resolution.slots.resize(slots, pad);
     resolved = resolution.slots[0];
 
+#if !defined(NDEBUG)
     (materialMode ? counters.tablesMaterial : counters.tablesWhole).fetch_add(1, std::memory_order_relaxed);
     counters.keys.fetch_add(resolution.mapping.size(), std::memory_order_relaxed);
     counters.paddedNull.fetch_add(paddedNull, std::memory_order_relaxed);
     counters.paddedShape.fetch_add(paddedShape, std::memory_order_relaxed);
     counters.paddedConversion.fetch_add(paddedConversion, std::memory_order_relaxed);
     if (BindlessTraced()) traceTable(plan, image, table, heapBase, materialBase, {materialMode, entries, materialEntries, static_cast<std::uint32_t>(resolution.mapping.size())});
+#endif
 }
 
 void materializeSnapshot(const IrResourcePlan& plan, const SrtRuntime& runtime, SrtWalker& walker, ResourceSnapshot& snapshot, std::vector<TableResolution>& tables) {
@@ -854,16 +880,24 @@ void ResourceMaterializer::Materialize(const IrResourcePlan& program, const SrtR
         throw;
     }
     ResourceSpecialization nextSpecialization;
+#if !defined(NDEBUG)
     const auto started = MaterializeProfiled() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+#endif
     buildResourceSpecialization(plan, nextSnapshot, tables, nextSpecialization);
+#if !defined(NDEBUG)
     if (MaterializeProfiled()) specializationNanoseconds.fetch_add(static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count()), std::memory_order_relaxed);
+#endif
     snapshot = std::move(nextSnapshot);
     specialization = std::move(nextSpecialization);
     reportBindless();
 }
 
 std::uint64_t ResourceMaterializer::SpecializationNanoseconds() {
+#if !defined(NDEBUG)
     return specializationNanoseconds.load(std::memory_order_relaxed);
+#else
+    return 0;
+#endif
 }
 
 std::uint32_t ResourceMaterializer::BindlessSlots() {
@@ -876,7 +910,9 @@ std::uint32_t ResourceMaterializer::BindlessSlots() {
 }
 
 void ResourceMaterializer::CountBindlessRejection(BindlessRejection reason) {
+#if !defined(NDEBUG)
     if (reason < BindlessRejection::Count) bindlessCounters().rejected[static_cast<std::size_t>(reason)].fetch_add(1, std::memory_order_relaxed);
+#endif
 }
 
 bool ResourceSpecialization::Buffer::operator==(const Buffer& other) const {

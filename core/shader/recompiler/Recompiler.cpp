@@ -123,6 +123,7 @@ IrProgram PrepareResourceProgram(const RecompileRequest& request) {
 
     auto program = translator.Translate(decoded, cfg, translateOptions);
     // Debug aid: APS5_DUMP_IR=<hex code address> (or "all") prints the program after each front-end pass.
+#if !defined(NDEBUG)
     const auto dumpIr = [&](const char* pass) {
         static const std::string list = [] { const char* text = std::getenv("APS5_DUMP_IR"); return text ? std::string(text) : std::string(); }();
         if (list.empty()) return;
@@ -131,6 +132,9 @@ IrProgram PrepareResourceProgram(const RecompileRequest& request) {
         if (list != "all" && list.find(address) == std::string::npos) return;
         std::fprintf(stderr, "==== IR 0x%s after %s\n%s\n", address, pass, ProgramToString(program).c_str());
     };
+#else
+    constexpr auto dumpIr = [](const char*) {};
+#endif
     dumpIr("translate");
 
     constexpr SsaBuilder ssaBuilder;
@@ -249,10 +253,14 @@ std::shared_ptr<SourceEntry> getSource(const RecompileRequest& request) {
             if (!bucket.empty()) {
                 // A second entry under one key is a code hash collision (or the unhashed key with
                 // identical code, which cannot happen); each is reported under the profile switch.
+#if !defined(NDEBUG)
+#if !defined(NDEBUG)
                 static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#endif
                 static std::uint64_t collisions = 0;
                 ++collisions;
                 if (profile) std::fprintf(stderr, "[recompile] source key collision %llu: %zu entries share a key (%zu code words)\n", static_cast<unsigned long long>(collisions), bucket.size() + 1, request.shader.code.size());
+#endif
             }
             bucket.push_back(source);
         }
@@ -450,9 +458,14 @@ ResultMemoCounters& resultMemoCounters() {
 }
 
 void reportResultMemo() {
+#if !defined(NDEBUG)
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#endif
     if (!profile) return;
+#if !defined(NDEBUG)
     auto& counters = resultMemoCounters();
+#endif
     const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
     auto last = counters.lastReport.load(std::memory_order_relaxed);
     if (last == 0) {
@@ -465,6 +478,7 @@ void reportResultMemo() {
     const auto evictions = counters.evictions.exchange(0, std::memory_order_relaxed);
     const auto populate = counters.populateNanoseconds.exchange(0, std::memory_order_relaxed);
     std::fprintf(stderr, "[recompile] result memo (10 s): %llu hits, %llu misses (%.1f%% hits), Populate %.1f us per miss / %.1f ms in total, %llu evictions\n", static_cast<unsigned long long>(hits), static_cast<unsigned long long>(misses), hits + misses != 0 ? 100.0 * static_cast<double>(hits) / static_cast<double>(hits + misses) : 0.0, misses != 0 ? static_cast<double>(populate) / 1000.0 / static_cast<double>(misses) : 0.0, static_cast<double>(populate) / 1e6, static_cast<unsigned long long>(evictions));
+#endif
 }
 
 // Everything materializeResult reads besides the variant: the snapshot (the descriptor words, the
@@ -515,12 +529,16 @@ std::uint64_t snapshotHash(const RecompileRequest& request, const ResourceSnapsh
 // object, a miss materializes outside the source mutex and inserts (a concurrent miss's object is
 // as good). `memoHit` reports the hit.
 std::shared_ptr<const RecompileResult> materializeMemoized(SourceEntry& source, const RecompileRequest& request, const ResourceSnapshot& snapshot, const ResourceSpecialization& specialization, bool* memoHit) {
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#endif
     std::shared_ptr<const CompiledVariant> variant;
     bool cacheHit = false;
     const auto hash = snapshotHash(request, snapshot);
     std::uint64_t index = 0;
+#if !defined(NDEBUG)
     auto& counters = resultMemoCounters();
+#endif
     {
         std::lock_guard lock(source.mutex);
         variant = findOrCompileVariant(source, request, snapshot, specialization, cacheHit);
@@ -528,17 +546,23 @@ std::shared_ptr<const RecompileResult> materializeMemoized(SourceEntry& source, 
         const auto found = source.memoIndex.find(index);
         if (found != source.memoIndex.end() && found->second->variantId == variant->result.variantId && found->second->hash == hash) {
             source.memo.splice(source.memo.begin(), source.memo, found->second);
+#if !defined(NDEBUG)
             counters.hits.fetch_add(1, std::memory_order_relaxed);
+#endif
             if (memoHit != nullptr) *memoHit = true;
             reportResultMemo();
             return found->second->result;
         }
     }
+#if !defined(NDEBUG)
     const auto started = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+#endif
     auto result = std::make_shared<RecompileResult>(materializeResult(*variant, request, snapshot));
     result->cacheHit = cacheHit;
+#if !defined(NDEBUG)
     if (profile) counters.populateNanoseconds.fetch_add(static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count()), std::memory_order_relaxed);
     counters.misses.fetch_add(1, std::memory_order_relaxed);
+#endif
     std::shared_ptr<const RecompileResult> shared = std::move(result);
     {
         std::lock_guard lock(source.mutex);
@@ -559,7 +583,9 @@ std::shared_ptr<const RecompileResult> materializeMemoized(SourceEntry& source, 
                 const auto& last = source.memo.back();
                 source.memoIndex.erase((last.variantId * 0x9e3779b97f4a7c15ull) ^ last.hash);
                 source.memo.pop_back();
+#if !defined(NDEBUG)
                 counters.evictions.fetch_add(1, std::memory_order_relaxed);
+#endif
             }
         }
     }
@@ -621,8 +647,10 @@ void materializeCapture(ResourceCapture& capture, const SrtRuntime& runtime) {
 }
 
 std::shared_ptr<const ResourceCapture> CaptureResources(const RecompileRequest& request, const SrtRuntime& runtime) {
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
     const auto started = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+#endif
     // Validates the stage inputs once per request, as GetResourcePlan and Recompile(request) do.
     static_cast<void>(RequestInputInfo(request));
     auto capture = std::make_shared<ResourceCapture>();
@@ -632,7 +660,9 @@ std::shared_ptr<const ResourceCapture> CaptureResources(const RecompileRequest& 
     } else {
         capture->plan = makeResourcePlan(request);
     }
+#if !defined(NDEBUG)
     if (profile) capture->sourceNanoseconds = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count());
+#endif
     materializeCapture(*capture, runtime);
     return capture;
 }
@@ -644,14 +674,18 @@ std::shared_ptr<const SourceHandle> ResolveSource(const RecompileRequest& reques
 }
 
 std::shared_ptr<const ResourceCapture> CaptureResources(const RecompileRequest& request, const SrtRuntime& runtime, const SourceHandle& handle) {
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
     const auto started = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+#endif
     // The whole vertex family (Vertex, Local, TC, TE, Mesh) validates V# fields the memo key does not cover.
     if (request.shader.stage != ShaderStage::Compute && request.shader.stage != ShaderStage::Fragment) static_cast<void>(RequestInputInfo(request));
     auto capture = std::make_shared<ResourceCapture>();
     capture->source = handle.source;
     capture->plan = handle.source->plan;
+#if !defined(NDEBUG)
     if (profile) capture->sourceNanoseconds = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count());
+#endif
     materializeCapture(*capture, runtime);
     return capture;
 }

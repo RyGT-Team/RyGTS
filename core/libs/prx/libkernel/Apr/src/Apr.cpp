@@ -147,8 +147,10 @@ int _resolveForEach(const char* prefix, const char** paths, uint32_t count, uint
 
 void _readFile(const Apr::ReadFileCommand& command) {
     const auto file = _file(command.fileId);
+#if !defined(NDEBUG)
     static const bool trace = std::getenv("APS5_TRACE_APR") != nullptr;
     if (trace) std::fprintf(stderr, "[apr] read %s offset=0x%llx size=0x%llx -> 0x%llx\n", file.path.string().c_str(), static_cast<unsigned long long>(command.offset), static_cast<unsigned long long>(command.size), static_cast<unsigned long long>(command.destination));
+#endif
 #ifdef _WIN32
     if (file.gameData && File::HddStreamingEnabled()) {
         if (command.offset > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) ||

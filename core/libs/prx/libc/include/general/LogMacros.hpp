@@ -64,12 +64,12 @@ _APS5_LOG_IMPL_NF(stdout, fmt); \
 #define APS5_LOG_TIMING(fmt, ...) APS5_LOG_OUT_IF(RTY_ENABLE_TIMING_LOG, fmt, __VA_ARGS__)
 #define APS5_LOG_CHARS_OUT_TIMING(fmt) APS5_LOG_CHARS_OUT_IF(RTY_ENABLE_TIMING_LOG, fmt)
 
-#ifdef APS5_DEBUG_LOG
-#define APS5_LOG_DEBUG(fmt, ...) _APS5_LOG_IMPL(stdout, fmt, __VA_ARGS__)
-#define APS5_LOG_CHARS_OUT_DEBUG(fmt) _APS5_LOG_IMPL_NF(stdout, fmt)
-#else
-#define APS5_LOG_OUT_DEBUG(fmt, ...) ((void)0)
-#define APS5_LOG_CHARS_OUT_DEBUG(fmt) ((void)0)
-#endif
+// Normal Debug/Trace logging remains runtime-filtered in every build.
+#define APS5_LOG_DEBUG(fmt, ...) \
+(RuntimeStdoutLog::Enabled(1) ? _APS5_LOG_IMPL(stdout, fmt, __VA_ARGS__) : 0)
+#define APS5_LOG_CHARS_OUT_DEBUG(fmt) \
+(RuntimeStdoutLog::Enabled(1) ? _APS5_LOG_IMPL_NF(stdout, fmt) : 0)
+#define APS5_LOG_OUT_DEBUG(fmt, ...) APS5_LOG_DEBUG(fmt, __VA_ARGS__)
+
 
 #endif

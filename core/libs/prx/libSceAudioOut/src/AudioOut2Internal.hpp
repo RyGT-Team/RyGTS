@@ -21,10 +21,15 @@ bool AudioOut2TraceEnabled();
 // Seconds since the first AudioOut2 call, for the trace.
 double AudioOut2TraceSeconds();
 
+#if !defined(NDEBUG)
 #define AUDIOOUT2_TRACE(...) \
     do { \
         if (AudioOut2TraceEnabled()) std::fprintf(stderr, "[audioout2] " __VA_ARGS__); \
     } while (0)
+
+#else
+#define AUDIOOUT2_TRACE(...) ((void)0)
+#endif
 
 static constexpr int SCE_AUDIO_OUT2_ERROR_INVALID_ARGUMENT = static_cast<int>(0x80260502);
 static constexpr int SCE_AUDIO_OUT2_ERROR_INVALID_HANDLE = static_cast<int>(0x80260503);

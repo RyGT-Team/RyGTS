@@ -44,6 +44,12 @@
 #include <vector>
 #include <utility>
 
+#if !defined(NDEBUG)
+#define AGC_DIAGNOSTIC(...) __VA_ARGS__
+#else
+#define AGC_DIAGNOSTIC(...) ((void)0)
+#endif
+
 namespace AgcDriver {
 namespace {
 
@@ -125,6 +131,7 @@ using ResourceCache = Graphics::ResourceCache;
 std::uint32_t DumpScale();
 void WriteFrameBmp(int index, std::uint32_t fullWidth, std::uint32_t fullHeight, std::span<const std::byte> full, std::uint32_t scale);
 
+#if !defined(NDEBUG)
 class FrameDumpWriter {
 public:
     ~FrameDumpWriter() {
@@ -186,6 +193,13 @@ private:
     std::size_t queuedBytes = 0;
     bool stopping = false;
 };
+
+#else
+class FrameDumpWriter {
+public:
+    static void Enqueue(int, std::uint32_t, std::uint32_t, std::uint32_t, std::vector<std::byte>) noexcept {}
+};
+#endif
 
 // The [present] line's counters (see the header); mutated under State::presentMutex.
 VulkanDevice::PresentStatistics presentCounters{};
@@ -441,6 +455,7 @@ struct VulkanDevice::State {
     void RetireSlot(PresentSlot& slot) {
         slot.inFlight = false;
         slot.kept.reset();
+#if !defined(NDEBUG)
         if (slot.dumpRecorded) {
             slot.dumpRecorded = false;
             WriteFrameDump(slot);
@@ -453,10 +468,12 @@ struct VulkanDevice::State {
         }
         if (!recorder) return;
         const auto afterFlip = recorder->NewestSubmitted() - slot.recorderSerial;
-        presentCounters.batchesAfterFlip += afterFlip;
+        AGC_DIAGNOSTIC(presentCounters.batchesAfterFlip += afterFlip);
         if (auto* frame = PerformanceContext::Current()) frame->NoteRetired(afterFlip, 0, 0);
         retiredRanges.push_back({slot.previousSerial, slot.recorderSerial});
         SettleRetired(false);
+
+#endif
     }
 
     // The GPU accounting of retired slots ([present] line, frame record): a batch's completion
@@ -465,6 +482,7 @@ struct VulkanDevice::State {
     // range waits until every serial in it has a record, or until the ring could have dropped its
     // oldest one (`force`: at teardown). Under presentMutex.
     void SettleRetired(bool force) {
+#if !defined(NDEBUG)
         const auto newest = recorder->NewestSubmitted();
         while (!retiredRanges.empty()) {
             const auto range = retiredRanges.front();
@@ -491,15 +509,20 @@ struct VulkanDevice::State {
             }
             const double gapMs = stamped ? (lastNs - firstNs) / 1e6 - busyMs : 0;
             if (auto* frame = PerformanceContext::Current()) frame->NoteRetired(0, busyMs, gapMs);
-            presentCounters.gpuBusyMs += busyMs;
-            presentCounters.gpuGapMs += gapMs;
-            presentCounters.gpuUnread += missing;
-            presentCounters.readsChecked += checked;
-            presentCounters.readsOverwritten += overwritten;
+            AGC_DIAGNOSTIC(presentCounters.gpuBusyMs += busyMs);
+            AGC_DIAGNOSTIC(presentCounters.gpuGapMs += gapMs);
+            AGC_DIAGNOSTIC(presentCounters.gpuUnread += missing);
+            AGC_DIAGNOSTIC(presentCounters.readsChecked += checked);
+            AGC_DIAGNOSTIC(presentCounters.readsOverwritten += overwritten);
         }
-    }
+
+#else
+
+#endif
+}
 
     void WriteFrameDump(const PresentSlot& slot) {
+#if !defined(NDEBUG)
         require(slot.dumpBuffer != nullptr, "frame dump was not recorded");
         std::vector<std::byte> full(slot.dumpBuffer->Bytes().begin(), slot.dumpBuffer->Bytes().end());
         const auto index = slot.dumpIndex;
@@ -508,7 +531,11 @@ struct VulkanDevice::State {
         static const auto start = std::chrono::steady_clock::now();
         std::fprintf(stderr, "[gpu] frame_%03d.bmp: %ux%u display read back on the GPU at %.1f s\n", index, width, height, std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
         dumpWriter.Enqueue(index, width, height, slot.dumpScale, std::move(full));
-    }
+
+#else
+
+#endif
+}
 
     // Blocks on the fence, or polls it every 50 us with APS5_PRESENT_POLL_FENCE=1 (the difference
     // in the wait is the presenter's wake-up latency).
@@ -1306,7 +1333,11 @@ bool VulkanDevice::FillBuffer(std::uint64_t address, std::size_t bytes, std::spa
     // pending at all. Batches recorded after the last such store keep running (SyncThrough).
     // Debug aid: APS5_FILL_SYNC=1 waits for every recorded store over the range, as before.
     static const bool alwaysSync = std::getenv("APS5_FILL_SYNC") != nullptr;
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     // APS5_PROFILE_DRAW: the fills' outcomes, cumulative, every 10 s (under the GpuMutex like the
     // rest) on a [fill-sync] line; Driver.cpp's [fill] line counts the fills and their bytes.
     // `labelSynced` counts syncs taken because a completion label was pending: over the range for
@@ -1319,7 +1350,11 @@ bool VulkanDevice::FillBuffer(std::uint64_t address, std::size_t bytes, std::spa
     // 16-byte pattern, with the pattern fills' doubling steps.
     static double decideMs = 0, recordMs = 0, notesMs = 0;
     static std::uint64_t uniformFills = 0, patternFills = 0, doublingSteps = 0, patternBuffersReused = 0, patternBuffersMade = 0;
+#if !defined(NDEBUG)
     static auto lastReport = std::chrono::steady_clock::now();
+#else
+    static std::chrono::steady_clock::time_point lastReport{};
+#endif
     // A 16-byte pattern is copied from a device-local buffer holding it repeated (filled once by a
     // doubling chain in device memory, cached per pattern), one transfer into the import per fill.
     // Debug aid: APS5_FILL_CHAIN=1 seeds and doubles the pattern in place in the import, as before.
@@ -1773,6 +1808,7 @@ void VulkanDevice::PresentPixels(std::uint32_t width, std::uint32_t height, std:
     APS5_LOG_OUT("PresentPixels width=%u height=%u pixels=%zu expected=%llu", width, height, pixels.size(), static_cast<unsigned long long>(width) * height * 4u);
     require(width != 0 && height != 0 && width <= 16384 && height <= 16384, "invalid display image extent");
     require(pixels.size() == static_cast<std::uint64_t>(width) * height * 4, "invalid display pixel buffer size");
+#if !defined(NDEBUG)
     // Debug aid: APS5_DUMP_FRAMES=<n> saves the first n presented frames as frame_<index>.bmp.
     static const int dumpLimit = [] {
         const char* value = std::getenv("APS5_DUMP_FRAMES");
@@ -1794,6 +1830,7 @@ void VulkanDevice::PresentPixels(std::uint32_t width, std::uint32_t height, std:
             std::fclose(file);
         }
     }
+#endif
     // Tests and tools present pixels synchronously; the game path splits the steps (see Driver::Present).
     if (!present(width, height, true, pixels)) return;
     FinishPresent();
@@ -1805,6 +1842,7 @@ namespace {
 // APS5_DUMP_SCALE=<n> (default 4) keeps every n-th pixel in each direction, so long runs of 4K
 // frames stay small.
 std::uint32_t DumpScale() {
+#if !defined(NDEBUG)
     static const std::uint32_t scale = [] {
         const char* value = std::getenv("APS5_DUMP_SCALE");
         if (value == nullptr) return std::uint32_t{4};
@@ -1815,10 +1853,15 @@ std::uint32_t DumpScale() {
         return parsed;
     }();
     return scale;
+
+#else
+    return 1;
+#endif
 }
 
 // frame_<index>.bmp: every DumpScale()-th pixel of a BGRA8 image, 32-bit top-down.
 void WriteFrameBmp(int index, std::uint32_t fullWidth, std::uint32_t fullHeight, std::span<const std::byte> full, std::uint32_t scale) {
+#if !defined(NDEBUG)
     require(scale != 0 && full.size() == static_cast<std::size_t>(fullWidth) * fullHeight * 4, "invalid frame dump pixels");
     const std::uint32_t width = (fullWidth + scale - 1) / scale;
     const std::uint32_t height = (fullHeight + scale - 1) / scale;
@@ -1842,6 +1885,10 @@ void WriteFrameBmp(int index, std::uint32_t fullWidth, std::uint32_t fullHeight,
         file.write(reinterpret_cast<const char*>(pixels.data()), static_cast<std::streamsize>(pixels.size()));
         file.close();
     }
+
+#else
+
+#endif
 }
 
 // Whether a resident image of the display buffer can be blitted to the swapchain as it is: one 2D
@@ -1892,6 +1939,7 @@ struct FrameDumps {
 };
 
 FrameDumps& Dumps() {
+#if !defined(NDEBUG)
     static FrameDumps dumps{[] {
         const char* value = std::getenv("APS5_DUMP_FRAMES");
         return value ? std::atoi(value) : 0;
@@ -1899,6 +1947,9 @@ FrameDumps& Dumps() {
         const char* value = std::getenv("APS5_DUMP_FRAMES_EVERY");
         return value ? std::max(std::atoi(value), 1) : 1;
     }()};
+#else
+    static FrameDumps dumps{};
+#endif
     return dumps;
 }
 
@@ -1909,13 +1960,21 @@ bool VulkanDevice::PresentDisplayBuffer(const DisplayBuffer& buffer) {
         const auto pixels = ReadDisplayBuffer(buffer);
         return present(buffer.width, buffer.height, true, pixels);
     }
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     // The display buffer is usually a resident render target whose results are still on the GPU: it
     // is blitted from that image, which skips the write-back retile, the 33 MB read of guest memory,
     // the upload and the detile dispatch. The deferred write-back stays pending as for any storage
     // image.
     static std::uint64_t residentPresents = 0, refreshedPresents = 0, notPending = 0, unsuitable = 0, gpuDumps = 0;
+#if !defined(NDEBUG)
     static auto lastReport = std::chrono::steady_clock::now();
+#else
+    static std::chrono::steady_clock::time_point lastReport{};
+#endif
     const auto bytes = DisplayBufferSize(buffer);
     std::shared_ptr<Graphics::StorageTexture> resident;
     VkFilter filter = VK_FILTER_LINEAR;
@@ -1923,9 +1982,9 @@ bool VulkanDevice::PresentDisplayBuffer(const DisplayBuffer& buffer) {
         bool pending = false;
         resident = PresentableResident(graphicsContext(), buffer, filter, pending);
         if (!pending) {
-            ++notPending;
+            AGC_DIAGNOSTIC(++notPending);
         } else if (resident == nullptr) {
-            ++unsuitable;
+            AGC_DIAGNOSTIC(++unsuitable);
         } else {
             // 64 KiB blocks the CPU wrote since the image last matched guest memory would be shown
             // stale (the write-back keeps the CPU's bytes for them): Refresh merges them into the
@@ -1935,11 +1994,12 @@ bool VulkanDevice::PresentDisplayBuffer(const DisplayBuffer& buffer) {
             GuestMemory::CollectWritesUncached(buffer.address, bytes);
             if (!GuestMemory::UnchangedSince(buffer.address, bytes, resident->Generation())) {
                 resident->Refresh();
-                ++refreshedPresents;
+                AGC_DIAGNOSTIC(++refreshedPresents);
             }
-            ++residentPresents;
+            AGC_DIAGNOSTIC(++residentPresents);
         }
     }
+#if !defined(NDEBUG)
     auto& dumps = Dumps();
     bool dumpFrame = false;
     if (dumps.dumped < dumps.limit && ++dumps.presents % static_cast<std::uint64_t>(dumps.every) == 0) {
@@ -1952,14 +2012,17 @@ bool VulkanDevice::PresentDisplayBuffer(const DisplayBuffer& buffer) {
             ++gpuDumps;
         }
     }
+#else
+    constexpr bool dumpFrame = false;
+#endif
     if (profile && std::chrono::steady_clock::now() - lastReport > std::chrono::seconds(10)) {
         lastReport = std::chrono::steady_clock::now();
         std::fprintf(stderr, "[flip] %llu presents from the resident image (%llu refreshed first), through guest memory: %llu not pending, %llu unsuitable; %llu GPU frame dumps\n", static_cast<unsigned long long>(residentPresents), static_cast<unsigned long long>(refreshedPresents), static_cast<unsigned long long>(notPending), static_cast<unsigned long long>(unsuitable), static_cast<unsigned long long>(gpuDumps));
     }
-    CaptureTrace::Log("present dump=%d address=%llx width=%u height=%u resident=%d generation=%llu", dumpFrame ? state->nextDumpIndex : -1, static_cast<unsigned long long>(buffer.address), buffer.width, buffer.height, resident != nullptr, static_cast<unsigned long long>(resident ? resident->Generation() : 0));
+    AGC_DIAGNOSTIC(CaptureTrace::Log("present dump=%d address=%llx width=%u height=%u resident=%d generation=%llu", dumpFrame ? state->nextDumpIndex : -1, static_cast<unsigned long long>(buffer.address), buffer.width, buffer.height, resident != nullptr, static_cast<unsigned long long>(resident ? resident->Generation() : 0)));
     if (!present(buffer.width, buffer.height, true, {}, &buffer, resident, filter, dumpFrame)) {
         // A dropped frame (swapchain out of date) keeps the dump numbering contiguous.
-        if (dumpFrame) --dumps.dumped;
+        AGC_DIAGNOSTIC(if (dumpFrame) --dumps.dumped);
         return false;
     }
     return true;
@@ -2039,7 +2102,7 @@ bool VulkanDevice::present(std::uint32_t width, std::uint32_t height, bool opaqu
     SubmitRecorded(false);
     std::chrono::steady_clock::time_point lastSubmittedAt{};
     const std::uint64_t batchesAtBlit = state->recorder ? state->recorder->NewestSubmitted(&lastSubmittedAt) : 0;
-    CaptureTrace::Log("blit dump=%d batch=%llu slot=%zu image=%u direct=%d", dumpFrame ? state->nextDumpIndex : -1, static_cast<unsigned long long>(batchesAtBlit), state->presentCursor, index, direct);
+    AGC_DIAGNOSTIC(CaptureTrace::Log("blit dump=%d batch=%llu slot=%zu image=%u direct=%d", dumpFrame ? state->nextDumpIndex : -1, static_cast<unsigned long long>(batchesAtBlit), state->presentCursor, index, direct));
     timing.Mark("pixel_upload");
     APS5_LOG_OUT_DEBUG("present source=%s bytes=%zu", pixels.empty() ? "clear" : "pixels", pixels.size());
     auto commands = slot.commands;
@@ -2171,7 +2234,11 @@ bool VulkanDevice::present(std::uint32_t width, std::uint32_t height, bool opaqu
     // The slot's fence signaled (retired above) or was never used: the reset cannot block.
     check(state->DeviceFunction<PFN_vkResetFences>("vkResetFences")(state->device, 1, &slot.fence), "vkResetFences present");
     check(state->DeviceFunction<PFN_vkQueueSubmit>("vkQueueSubmit")(state->queue, 1, &submit, slot.fence), "vkQueueSubmit clear");
+#if !defined(NDEBUG)
     const auto submittedAt = std::chrono::steady_clock::now();
+#else
+    constexpr std::chrono::steady_clock::time_point submittedAt{};
+#endif
     timing.Mark("queue_submit");
     APS5_LOG_CHARS_OUT_DEBUG("Presentation vkQueueSubmit OK");
     {
@@ -2192,17 +2259,17 @@ bool VulkanDevice::present(std::uint32_t width, std::uint32_t height, bool opaqu
         state->presentCursor = (state->presentCursor + 1) % state->presentSlots.size();
         state->queuePending = true;
         state->queueIndex = index;
-        ++presentCounters.presents;
+        AGC_DIAGNOSTIC(++presentCounters.presents);
         if (auto* frame = PerformanceContext::Current()) {
             frame->NoteBlit(batchesAtBlit, lastSubmittedAt, submittedAt);
             // The serials are cumulative: only their difference (the batches other queues put
             // ahead of the blit since the flip packet) is summed; a record without a flip sample
             // (the drain paths) contributes nothing.
             const auto atFlip = frame->BatchesAtFlip();
-            if (atFlip != 0 && batchesAtBlit >= atFlip) presentCounters.batchesAheadOfBlit += batchesAtBlit - atFlip;
+            if (atFlip != 0 && batchesAtBlit >= atFlip) AGC_DIAGNOSTIC(presentCounters.batchesAheadOfBlit += batchesAtBlit - atFlip);
             if (frame->FlipReached() != std::chrono::steady_clock::time_point{}) {
-                presentCounters.blitSubmitAfterFlipMs += std::chrono::duration<double, std::milli>(submittedAt - frame->FlipReached()).count();
-                presentCounters.lastSubmitAfterFlipMs += std::chrono::duration<double, std::milli>(std::max(lastSubmittedAt, submittedAt) - frame->FlipReached()).count();
+                AGC_DIAGNOSTIC(presentCounters.blitSubmitAfterFlipMs += std::chrono::duration<double, std::milli>(submittedAt - frame->FlipReached()).count());
+                AGC_DIAGNOSTIC(presentCounters.lastSubmitAfterFlipMs += std::chrono::duration<double, std::milli>(std::max(lastSubmittedAt, submittedAt) - frame->FlipReached()).count());
             }
         }
     }
@@ -2237,7 +2304,11 @@ bool VulkanDevice::PresentWaitsForSlots(const DisplayBuffer* buffer) const {
 }
 
 void VulkanDevice::FlipBatches(std::uint64_t& submissions, std::uint64_t& unsignaled) const {
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     submissions = state->recorder ? state->recorder->Submissions() : 0;
     unsignaled = profile && state->recorder ? state->recorder->UnsignaledBatches() : 0;
 }
@@ -2261,7 +2332,11 @@ double VulkanDevice::RetirePresents(std::size_t keepInFlight) {
             check(result, "vkGetFenceStatus present");
             timing.Mark("poll");
         } else {
+#if !defined(NDEBUG)
             const auto start = std::chrono::steady_clock::now();
+#else
+            const std::chrono::steady_clock::time_point start{};
+#endif
             state->WaitPresentFence(slot.fence);
             waitedMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
             timing.Mark("wait");
@@ -2389,7 +2464,11 @@ void VulkanDevice::ColorMetadataPass(const Graphics::ColorMetadataPass& pass) {
 void VulkanDevice::Draw(const Graphics::State& graphics, const Pm4::DrawParameters& draw, std::span<const Graphics::CompiledShader> shaders, std::span<const Graphics::GuestMemorySnapshot> snapshots, std::shared_ptr<const DrawRecipe>* recipe) {
     // Two stdout lines per draw cost ~1.3 ms per frame of the queue-0 worker (part of it under the
     // GPU mutex); APS5_TRACE_DRAWS=1 restores them.
+#if !defined(NDEBUG)
     static const bool trace = std::getenv("APS5_TRACE_DRAWS") != nullptr;
+#else
+    static constexpr bool trace = false;
+#endif
     if (trace) APS5_LOG_OUT("VulkanDevice::Draw indices=%u instances=%u indexSize=%u address=0x%llx shaders=%zu colorTarget=%u", draw.indexCount, draw.instanceCount, draw.indexSize, static_cast<unsigned long long>(draw.indexAddress), shaders.size(), static_cast<unsigned>(graphics.hasColorTarget));
     const auto context = graphicsContext();
     Graphics::Draw(context, graphics, draw, shaders, snapshots, recipe);
@@ -2509,11 +2588,16 @@ bool SyncEachDispatch() {
 
 // Debug aid: APS5_TRACE_DISPATCH_IO prints every dispatch's resources (after write-back when synced).
 bool TraceDispatchIo() {
+#if !defined(NDEBUG)
     static const bool traceIo = std::getenv("APS5_TRACE_DISPATCH_IO") != nullptr;
+#else
+    static constexpr bool traceIo = false;
+#endif
     return traceIo;
 }
 
 void WatchMemory(std::uint64_t programAddress) {
+#if !defined(NDEBUG)
     struct Range {
         std::uint64_t address = 0;
         std::uint64_t bytes = 0;
@@ -2573,6 +2657,10 @@ void WatchMemory(std::uint64_t programAddress) {
         std::ofstream(name, std::ios::binary).write(reinterpret_cast<const char*>(history[i].second.data()), static_cast<std::streamsize>(history[i].second.size()));
     }
     std::fprintf(stderr, "[watch] loop guard tripped: %zu contents written (watch_*.bin, oldest first)\n", history.size());
+
+#else
+
+#endif
 }
 
 // The [dispatch] phases for indirect dispatches alone, every 10 s on an [indirect] line: what the
@@ -2591,7 +2679,11 @@ struct IndirectHold {
     std::uint64_t writersScanned = 0;
     std::uint64_t drawWritersScanned = 0;
     std::size_t maxWriters = 0;
+#if !defined(NDEBUG)
     std::chrono::steady_clock::time_point lastReport = std::chrono::steady_clock::now();
+#else
+    std::chrono::steady_clock::time_point lastReport{};
+#endif
 };
 
 // The running totals of the device call (APS5_PROFILE_DRAW), shared by dispatch, DispatchRecipe
@@ -2688,7 +2780,11 @@ struct DispatchTimer {
     std::array<double, DispatchRows> callMs{};
     std::chrono::steady_clock::time_point start;
     std::chrono::steady_clock::time_point phaseStart;
+#if !defined(NDEBUG)
     DispatchTimer(bool profile, bool indirect, std::size_t spirvWords, std::uint64_t programAddress) : profile(profile), indirect(indirect), spirvWords(spirvWords), programAddress(programAddress), start(std::chrono::steady_clock::now()), phaseStart(start) {}
+#else
+    DispatchTimer(bool, bool indirect, std::size_t spirvWords, std::uint64_t programAddress) : profile(false), indirect(indirect), spirvWords(spirvWords), programAddress(programAddress), start{}, phaseStart{} {}
+#endif
     void add(DispatchPhase which, double ms) {
         if (!profile) return;
         auto& d = Dispatches();
@@ -2705,7 +2801,7 @@ struct DispatchTimer {
         // Slow phases are reported as they finish, so a dispatch that never completes shows where it is.
         if (ms > 1000) std::fprintf(stderr, "[dispatch] %s took %.0f ms (%zu words, program 0x%llx)\n", DispatchRowName(which), ms, spirvWords, static_cast<unsigned long long>(programAddress));
     }
-    void restart() { phaseStart = std::chrono::steady_clock::now(); }
+    void restart() { AGC_DIAGNOSTIC(phaseStart = std::chrono::steady_clock::now()); }
     // The call's phases as text, only when wanted: a slow call, or a new [indirect] maximum.
     std::string formatCall() const {
         std::string text;
@@ -2829,7 +2925,11 @@ void VulkanDevice::NoteDrawRecipeMiss(DrawRecipePrecheck miss) {
 
 RecipeOutcome VulkanDevice::DrawFromRecipe(const Graphics::State& graphics, const Pm4::DrawParameters& draw, std::span<const Graphics::CompiledShader> shaders, std::span<const Graphics::GuestMemorySnapshot> snapshots, const std::shared_ptr<const DrawRecipe>& recipe) {
     PerformanceTimer timing("Vulkan.DrawFromRecipe");
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     auto& counters = Recipes().kinds[static_cast<std::size_t>(RecipeKind::Draw)];
     // R10: the recipe names the device it was built on (the driver may have replaced the device
     // between the hit and the lock).
@@ -2861,7 +2961,11 @@ RecipeOutcome VulkanDevice::DrawFromRecipe(const Graphics::State& graphics, cons
 }
 
 std::uint64_t VulkanDevice::presync(std::span<const std::pair<std::uint64_t, std::uint64_t>> surfaces) {
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     auto& counters = Presyncs();
     bool overlaps = false;
     for (const auto& [address, bytes] : surfaces) overlaps = overlaps || Graphics::Recorder::SnapshotWriteOverlaps(address, static_cast<std::size_t>(bytes));
@@ -2899,8 +3003,16 @@ std::shared_ptr<PreparedDispatch> VulkanDevice::PrepareDispatch(const ShaderReco
     // APS5_LOCKED_BUILD=1: the whole build under the mutex, as before the split.
     static const bool lockedBuild = std::getenv("APS5_LOCKED_BUILD") != nullptr;
     if (lockedBuild || shader.spirv.size() < 5 || shader.spirv[0] != 0x07230203u) return nullptr;
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
+#if !defined(NDEBUG)
     const auto start = std::chrono::steady_clock::now();
+#else
+    const std::chrono::steady_clock::time_point start{};
+#endif
     const Graphics::CompiledShader compute{ShaderRecompiler::ShaderStage::Compute, &shader, 0};
     const auto context = graphicsContext();
     auto prepared = std::make_shared<PreparedDispatch>();
@@ -2956,7 +3068,11 @@ std::span<const double, 5> VulkanDevice::PreparePhaseMs(const PreparedDispatch& 
 }
 
 std::shared_ptr<RecipeHit> VulkanDevice::PrepareRecipe(const std::shared_ptr<const Recipe>& recipe, bool indirect) {
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     auto& counters = Recipes().kinds[indirect ? 1 : 0];
     const auto start = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     const auto miss = [&](RecipeMiss reason) {
@@ -3049,10 +3165,14 @@ void VulkanDevice::decideIndirect(RecordedDispatch& record, IndirectOutcome& out
     if (outcome.cpuReason == 0) return;
     // The read waits for the producing batch through the flush hook, as the driver's resolve
     // did for every indirect dispatch before; the counts then go through the direct checks.
+#if !defined(NDEBUG)
     const auto readStart = std::chrono::steady_clock::now();
+#else
+    constexpr std::chrono::steady_clock::time_point readStart{};
+#endif
     std::array<std::uint32_t, 3> groups{};
     GuestMemory::Read(arguments, std::as_writable_bytes(std::span(groups)), 4);
-    outcome.argumentReadMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - readStart).count();
+    AGC_DIAGNOSTIC(outcome.argumentReadMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - readStart).count());
     record.x = groups[0];
     record.y = groups[1];
     record.z = groups[2];
@@ -3217,7 +3337,11 @@ VulkanDevice::IndirectOutcome VulkanDevice::dispatch(const ShaderRecompiler::Rec
         std::lock_guard pipelines(state->computePipelinesMutex);
         if (const auto found = state->computePipelines.find(pipelineKey); found != state->computePipelines.end()) objects = found->second;
     }
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     auto& d = Dispatches();
     // This call's phases (indexed by DispatchPhase), formatted only for a slow call or a new
     // [indirect] maximum; the totals per phase across dispatches are reported every 1000 dispatches
@@ -3431,7 +3555,11 @@ VulkanDevice::IndirectOutcome VulkanDevice::dispatch(const ShaderRecompiler::Rec
             static std::map<std::uint64_t, Waits> byProgram;
             static std::uint64_t syncs = 0;
             static double waitedMs = 0;
+#if !defined(NDEBUG)
             static auto lastReport = std::chrono::steady_clock::now();
+#else
+            static std::chrono::steady_clock::time_point lastReport{};
+#endif
             const auto now = std::chrono::steady_clock::now();
             const auto ms = std::chrono::duration<double, std::milli>(now - syncStart).count();
             auto& waits = byProgram[programAddress != 0 ? programAddress : shader.variantId];
@@ -3500,7 +3628,11 @@ RecipeOutcome VulkanDevice::DispatchRecipe(const ShaderRecompiler::RecompileResu
     // Without the refresh the template holds the words it was keyed with: a data-only hit takes
     // the ordinary path, whose word-keyed lookup serves or builds the object for the live words.
     if (refreshByWords && !TemplateDataRefresh()) return RecipeOutcome::Rebuild;
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     DispatchTimer timer(profile, arguments != 0, shader.spirv.size(), programAddress);
     DispatchTimer::countDispatch(profile);
     const auto lookupsBefore = Graphics::DeviceProcLookups();
@@ -3599,3 +3731,5 @@ RecipeOutcome VulkanDevice::DispatchRecipe(const ShaderRecompiler::RecompileResu
 }
 
 }
+
+#undef AGC_DIAGNOSTIC

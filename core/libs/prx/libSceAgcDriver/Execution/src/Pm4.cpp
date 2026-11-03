@@ -41,7 +41,11 @@ std::uint32_t registerOffset(std::uint32_t value) {
 // Debug aid: APS5_TRACE_CONTEXT_STATE logs context-state operations and the context registers
 // written while a context is pushed. Read once: getenv scans the environment under a lock.
 bool TraceContextState() {
+#if !defined(NDEBUG)
     static const bool value = std::getenv("APS5_TRACE_CONTEXT_STATE") != nullptr;
+#else
+    static constexpr bool value = false;
+#endif
     return value;
 }
 

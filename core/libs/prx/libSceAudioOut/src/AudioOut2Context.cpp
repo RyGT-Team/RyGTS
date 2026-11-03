@@ -45,13 +45,23 @@ static constexpr std::chrono::seconds PAD_PROBE_INTERVAL{2};
 static constexpr std::uint32_t PAD_SLACK_GRAINS = 2;
 
 bool AudioOut2TraceEnabled() {
+#if !defined(NDEBUG)
+
     static const bool enabled = std::getenv("APS5_TRACE_AUDIOOUT2") != nullptr;
     return enabled;
+#else
+    return false;
+#endif
 }
 
 double AudioOut2TraceSeconds() {
+#if !defined(NDEBUG)
+
     static const auto start = Clock::now();
     return std::chrono::duration<double>(Clock::now() - start).count();
+#else
+    return 0;
+#endif
 }
 
 static AudioOut2Context* FromHandle(AudioOut2ContextHandle ctx) {
@@ -94,7 +104,7 @@ static std::uint32_t QueueLevel(AudioOut2Context& context, Clock::time_point now
 
 static void OpenDevice(AudioOut2Context& context) {
     if (SDL_InitSubSystem(SDL_INIT_AUDIO) < 0) {
-        AUDIOOUT2_TRACE("SDL audio init failed: %s\n", SDL_GetError());
+        APS5_LOG_ERR("SDL audio init failed: %s", SDL_GetError());
         return;
     }
     SDL_AudioSpec desired{};
@@ -108,7 +118,7 @@ static void OpenDevice(AudioOut2Context& context) {
     // always takes stereo float at 48 kHz.
     context.device = SDL_OpenAudioDevice(nullptr, 0, &desired, &obtained, 0);
     if (context.device == 0) {
-        AUDIOOUT2_TRACE("SDL_OpenAudioDevice failed: %s\n", SDL_GetError());
+        APS5_LOG_ERR("SDL_OpenAudioDevice failed: %s", SDL_GetError());
         return;
     }
     SDL_PauseAudioDevice(context.device, 0);
@@ -199,7 +209,9 @@ static std::uint32_t Render(AudioOut2Context& context, Clock::time_point now) {
     const auto mixed = AudioOut2MixPorts(context, context.mix.data(), pad, context.grain);
     for (float& sample : context.mix) {
         sample = std::clamp(sample * MASTER_GAIN, -1.0f, 1.0f);
+#if !defined(NDEBUG)
         if (AudioOut2TraceEnabled()) context.summaryPeak = std::max(context.summaryPeak, std::abs(sample));
+#endif
     }
     if (pad != nullptr) {
         AudioOut2FinishPadMix(pad, context.grain);
@@ -208,12 +220,16 @@ static std::uint32_t Render(AudioOut2Context& context, Clock::time_point now) {
     if (context.device == 0) return mixed;
     const auto queuedBytes = SDL_GetQueuedAudioSize(context.device);
     if (queuedBytes > MAX_QUEUED_MS * OUTPUT_BYTES_PER_MS) {
+#if !defined(NDEBUG)
         context.dropped++;
+#endif
         return mixed;
     }
     if (queuedBytes == 0) {
         static const std::vector<float> silence(static_cast<std::size_t>(CUSHION_MS) * AUDIO_OUT2_SAMPLE_RATE / 1000 * AUDIO_OUT2_OUTPUT_CHANNELS, 0.0f);
+#if !defined(NDEBUG)
         context.primes++;
+#endif
         SDL_QueueAudio(context.device, silence.data(), static_cast<Uint32>(silence.size() * sizeof(float)));
     }
     SDL_QueueAudio(context.device, context.mix.data(), GrainBytes(context));
@@ -221,6 +237,8 @@ static std::uint32_t Render(AudioOut2Context& context, Clock::time_point now) {
 }
 
 static void TraceSummary(AudioOut2Context& context, Clock::time_point now) {
+#if !defined(NDEBUG)
+
     if (!AudioOut2TraceEnabled()) return;
     if (context.summaryStart == Clock::time_point{}) {
         context.summaryStart = now;
@@ -238,6 +256,7 @@ static void TraceSummary(AudioOut2Context& context, Clock::time_point now) {
     context.summaryAdvances = 0;
     context.summaryPolls = 0;
     context.summaryPeak = 0.0f;
+#endif
 }
 
 extern "C" {
@@ -248,9 +267,11 @@ int APS5_VABI sceAudioOut2ContextAdvance(AudioOut2ContextHandle ctx) {
     auto* context = FromHandle(ctx);
     if (!context) return SCE_AUDIO_OUT2_ERROR_INVALID_HANDLE;
     std::lock_guard lock(context->lock);
+#if !defined(NDEBUG)
     context->advances++;
     context->summaryAdvances++;
     if (context->advances <= CALL_TRACE_FULL) AUDIOOUT2_TRACE("t=%.3f Advance ctx %p (pushes so far %llu)\n", AudioOut2TraceSeconds(), static_cast<void*>(context), static_cast<unsigned long long>(context->pushes));
+#endif
     return 0;
 }
 
@@ -290,9 +311,11 @@ int APS5_VABI sceAudioOut2ContextGetQueueLevel(AudioOut2ContextHandle ctx, uint3
     const auto level = QueueLevel(*context, Clock::now());
     if (queue_level) *queue_level = level;
     if (available_queue) *available_queue = context->queueDepth - level;
+#if !defined(NDEBUG)
     context->queueLevelPolls++;
     context->summaryPolls++;
     if (context->queueLevelPolls <= CALL_TRACE_FULL) AUDIOOUT2_TRACE("t=%.3f GetQueueLevel ctx %p -> level %u, available %u\n", AudioOut2TraceSeconds(), static_cast<void*>(context), level, context->queueDepth - level);
+#endif
     return 0;
 }
 
@@ -304,8 +327,10 @@ int APS5_VABI sceAudioOut2ContextPush(AudioOut2ContextHandle ctx, uint32_t block
     const auto waitStart = now;
     while (QueueLevel(*context, now) >= context->queueDepth) {
         if (!blocking) {
+#if !defined(NDEBUG)
             context->fullRejects++;
             if (context->fullRejects <= CALL_TRACE_FULL) AUDIOOUT2_TRACE("t=%.3f Push ctx %p non-blocking on a full queue (%u): rejected\n", AudioOut2TraceSeconds(), static_cast<void*>(context), context->queueDepth);
+#endif
             return SCE_AUDIO_OUT2_ERROR_QUEUE_FULL;
         }
         if (now - waitStart > FULL_WAIT_TIMEOUT) break;
@@ -317,6 +342,7 @@ int APS5_VABI sceAudioOut2ContextPush(AudioOut2ContextHandle ctx, uint32_t block
     context->queued++;
     context->playHead += GrainDuration(*context);
     const auto mixed = Render(*context, now);
+#if !defined(NDEBUG)
     context->pushes++;
     context->summaryPushes++;
     if (blocking) context->blockingPushes++;
@@ -324,6 +350,7 @@ int APS5_VABI sceAudioOut2ContextPush(AudioOut2ContextHandle ctx, uint32_t block
         AUDIOOUT2_TRACE("t=%.3f Push ctx %p blocking=%u: grain from %u ports, hw queue %u/%u, sdl queue %u ms\n", AudioOut2TraceSeconds(), static_cast<void*>(context), blocking,
             mixed, QueueLevel(*context, now), context->queueDepth, SdlQueuedMs(*context));
     }
+#endif
     TraceSummary(*context, now);
     return 0;
 }

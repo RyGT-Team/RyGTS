@@ -11,20 +11,34 @@
 #include <functional>
 #include <shared_mutex>
 
+#if !defined(NDEBUG)
+#define AGC_DIAGNOSTIC(...) __VA_ARGS__
+#else
+#define AGC_DIAGNOSTIC(...) ((void)0)
+#endif
+
 namespace AgcDriver::DriverDetail {
 
 template <typename TWork>
 void Driver::timed(double WorkerProfile::*bucket, TWork&& work) {
+#if !defined(NDEBUG)
     static thread_local WorkerProfile profile;
     const auto begin = std::chrono::steady_clock::now();
     work();
     const auto end = std::chrono::steady_clock::now();
     profile.*bucket += std::chrono::duration<double, std::milli>(end - begin).count();
+#if !defined(NDEBUG)
     static const bool report = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool report = false;
+#endif
     if (report && end - profile.reported > std::chrono::seconds(10)) {
         profile.reported = end;
         std::fprintf(stderr, "[gpu] worker at %.0f s: dispatch %.1f s, draw %.1f s, wait %.1f s\n", std::chrono::duration<double>(end - profile.start).count(), profile.dispatchMs / 1000, profile.drawMs / 1000, profile.waitMs / 1000);
     }
+#else
+    work();
+#endif
 }
 
 template <typename TWork>
@@ -40,7 +54,11 @@ void Driver::execute(const Submission& submission) {
     if (submission.suspend) {
 
         static const bool suspendDrain = std::getenv("APS5_SUSPEND_DRAIN") != nullptr;
+#if !defined(NDEBUG)
         static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+        static constexpr bool profile = false;
+#endif
         ++suspendPoints;
         auto& costs = submissionCosts(submission.queue);
 
@@ -71,10 +89,18 @@ void Driver::execute(const Submission& submission) {
         state = &queues[submission.queue];
     }
     auto& queue = *state;
+#if !defined(NDEBUG)
     static const bool traceGpu = std::getenv("APS5_TRACE_GPU") != nullptr;
+#else
+    static constexpr bool traceGpu = false;
+#endif
     if (traceGpu) std::fprintf(stderr, "[gpu] %.1f execute serial=%llu queue=0x%x dwords=%zu\n", TraceMs(), static_cast<unsigned long long>(submission.serial), submission.queue, submission.commands.size());
 
+#if !defined(NDEBUG)
     static const long dumpQueue = [] { const char* text = std::getenv("APS5_DUMP_QUEUE"); return text ? std::strtol(text, nullptr, 16) : -1L; }();
+#else
+    static const long dumpQueue = -1;
+#endif
     if (static_cast<long>(submission.queue) == dumpQueue) {
 
         static int dumped = 0;
@@ -95,7 +121,11 @@ void Driver::execute(const Submission& submission) {
     }
     PacketHistory recent{submission.commands};
 
+#if !defined(NDEBUG)
     static const bool profilePackets = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profilePackets = false;
+#endif
 
     thread_local PacketProfile packetProfile;
     ++packetProfile.submissions;
@@ -113,11 +143,11 @@ void Driver::execute(const Submission& submission) {
         if (opcode != 0x3c && opcode != 0x93 && header != RenderingWaitPacketHeader && header != FlipPacketHeader) deviceUse.lock();
 
         GuestMemory::SetCurrentPacket(header == FlipPacketHeader ? 0xffffu : opcode, submission.queue);
-        CaptureTrace::Log("packet submission=%llu queue=%x offset=%zu header=%08x words=%zu", static_cast<unsigned long long>(submission.serial), submission.queue, cursor, header, packet.size());
+        AGC_DIAGNOSTIC(CaptureTrace::Log("packet submission=%llu queue=%x offset=%zu header=%08x words=%zu", static_cast<unsigned long long>(submission.serial), submission.queue, cursor, header, packet.size()));
 
         const auto flushStart = profilePackets ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
         flushBetweenPackets(submission.queue, header, opcode == 0x49 || opcode == 0x37);
-        PacketTimer packetTimer{profilePackets, header == FlipPacketHeader ? 0xffffu : opcode, submission.queue, packetProfile, std::chrono::steady_clock::now()};
+        PacketTimer packetTimer{profilePackets, header == FlipPacketHeader ? 0xffffu : opcode, submission.queue, packetProfile, profilePackets ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{}};
 
         if (profilePackets) {
             packetStartedAt() = packetTimer.start;
@@ -191,7 +221,7 @@ void Driver::execute(const Submission& submission) {
             frame->IncludeSubmission(submission.serial, now, now, now, true);
             frame->SetFlip(submission.serial, cursor, now, now);
             frame->NoteFlipBatches(batchesAtFlip, unsignaledAtFlip);
-            CaptureTrace::Log("flip frame=%llu submission=%llu offset=%zu batch=%llu unsignaled=%llu", static_cast<unsigned long long>(frameSerial), static_cast<unsigned long long>(submission.serial), cursor, static_cast<unsigned long long>(batchesAtFlip), static_cast<unsigned long long>(unsignaledAtFlip));
+            AGC_DIAGNOSTIC(CaptureTrace::Log("flip frame=%llu submission=%llu offset=%zu batch=%llu unsignaled=%llu", static_cast<unsigned long long>(frameSerial), static_cast<unsigned long long>(submission.serial), cursor, static_cast<unsigned long long>(batchesAtFlip), static_cast<unsigned long long>(unsignaledAtFlip)));
             submission.flips.at(cursor)->GpuReady(frame);
         } else if (opcode == 0x15) {
             timed(&WorkerProfile::dispatchMs, [&] { dispatch(queue, packet, submission); });
@@ -202,7 +232,11 @@ void Driver::execute(const Submission& submission) {
             Graphics::Recorder::CountRecordedWork();
             finishDispatchPacket(true);
         } else if (opcode == 0x3c || opcode == 0x93) {
+#if !defined(NDEBUG)
             static const bool traceGpu = std::getenv("APS5_TRACE_GPU") != nullptr;
+#else
+            static constexpr bool traceGpu = false;
+#endif
             const auto waitStart = std::chrono::steady_clock::now();
             timed(&WorkerProfile::waitMs, [&] { waitMemory(packet, submission.queue, recent, submission.received, submission.heldAtSubmit.contains(cursor)); });
             if (traceGpu && std::chrono::steady_clock::now() - waitStart > std::chrono::milliseconds(200)) {
@@ -220,8 +254,16 @@ void Driver::execute(const Submission& submission) {
         } else if (drawPacket) {
             bool drawn = false;
             timed(&WorkerProfile::drawMs, [&] { tolerate("draw", [&] {
+#if !defined(NDEBUG)
                 static const bool traceDraws = std::getenv("APS5_TRACE_DRAWS") != nullptr;
+#else
+                static constexpr bool traceDraws = false;
+#endif
+#if !defined(NDEBUG)
                 static const bool profileDraws = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+                static constexpr bool profileDraws = false;
+#endif
                 const auto color = (static_cast<std::uint64_t>(readRegister(queue.context, 0x390)) << 40u) | (static_cast<std::uint64_t>(readRegister(queue.context, 0x318)) << 8u);
                 const auto started = profileDraws ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
                 const auto countSkip = [&](Graphics::DrawSkip kind) {
@@ -254,7 +296,7 @@ void Driver::execute(const Submission& submission) {
                     std::string rejected;
                     const auto verdict = draw(queue, packet, submission, rejected);
                     drawn = verdict == DrawVerdict::Drawn;
-                    CaptureTrace::Log("draw submission=%llu queue=%x offset=%zu target=%llx mask=%x verdict=%d reason=%.256s", static_cast<unsigned long long>(submission.serial), submission.queue, cursor, static_cast<unsigned long long>(color), readRegister(queue.context, 0x8e), static_cast<int>(verdict), rejected.c_str());
+                    AGC_DIAGNOSTIC(CaptureTrace::Log("draw submission=%llu queue=%x offset=%zu target=%llx mask=%x verdict=%d reason=%.256s", static_cast<unsigned long long>(submission.serial), submission.queue, cursor, static_cast<unsigned long long>(color), readRegister(queue.context, 0x8e), static_cast<int>(verdict), rejected.c_str()));
                     if (verdict == DrawVerdict::Rejected) {
                         skipped(rejected);
                         countSkip(Graphics::DrawSkip::Prechecked);
@@ -264,7 +306,7 @@ void Driver::execute(const Submission& submission) {
                         std::fprintf(stderr, "[draw] target 0x%llx mask 0x%x ok\n",static_cast<unsigned long long>(color), readRegister(queue.context, 0x8e));
                     }
                 } catch (const std::exception& error) {
-                    CaptureTrace::Log("draw-error submission=%llu offset=%zu reason=%.256s", static_cast<unsigned long long>(submission.serial), cursor, error.what());
+                    AGC_DIAGNOSTIC(CaptureTrace::Log("draw-error submission=%llu offset=%zu reason=%.256s", static_cast<unsigned long long>(submission.serial), cursor, error.what()));
                     skipped(error.what());
                     countSkip(Graphics::DrawSkip::Thrown);
                 }
@@ -304,3 +346,5 @@ void Driver::execute(const Submission& submission) {
 }
 
 }
+
+#undef AGC_DIAGNOSTIC

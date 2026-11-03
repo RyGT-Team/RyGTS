@@ -19,7 +19,11 @@ void Driver::appendEntryRegions(const DispatchVariant& variant, std::vector<Shad
 
 bool Driver::syncPendingRuns(std::uint64_t program, std::uint32_t queue, const ShaderRecompiler::RecompileResult& compiled, std::span<const ShaderRecompiler::MemoryRegion> regions, std::uint64_t& synced, PendingView& pending, std::optional<SampledReadScope>& sampling) {
     using Policy = ShaderMemory::PendingWrite;
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     for (const auto& region : regions) {
         if (!pending.Overlaps(region.guestAddress, region.bytes.size())) continue;
         if (!sampling) sampling.emplace(siteSampling() ? evidenceValidations : evidenceReads);

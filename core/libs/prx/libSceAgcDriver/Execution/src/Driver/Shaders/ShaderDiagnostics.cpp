@@ -11,8 +11,16 @@ void Driver::reportSkip(const char* kind, const std::string& what) {
     static std::set<std::size_t> reported;
     static std::map<std::string, int> requestDumps;
 
+#if !defined(NDEBUG)
     static const bool traceSkips = std::getenv("APS5_TRACE_SKIPS") != nullptr;
+#else
+    static constexpr bool traceSkips = false;
+#endif
+#if !defined(NDEBUG)
     static const int dumpLimit = [] { const char* text = std::getenv("APS5_SKIP_REQUEST_DUMPS"); return text ? std::atoi(text) : 8; }();
+#else
+    static const int dumpLimit = {};
+#endif
     static constexpr std::string_view marker = "\nRecompileRequest:\n";
     std::lock_guard lock(reportedMutex);
     std::string line;

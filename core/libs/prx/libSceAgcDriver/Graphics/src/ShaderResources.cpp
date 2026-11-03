@@ -27,6 +27,12 @@
 #include <unordered_map>
 #include "prx/libc/include/GuestAllocations.hpp"
 
+#if !defined(NDEBUG)
+#define AGC_DIAGNOSTIC(...) __VA_ARGS__
+#else
+#define AGC_DIAGNOSTIC(...) ((void)0)
+#endif
+
 namespace AgcDriver::Graphics {
 namespace {
 
@@ -162,7 +168,11 @@ TextureCounters& TextureCounts() {
 }
 
 void reportTextureCounters() {
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     if (!profile) return;
     auto& counters = TextureCounts();
     const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -251,7 +261,7 @@ std::shared_ptr<StorageTexture> sampledStorageSource(const Context& context, con
         std::lock_guard lock(failures.mutex);
         if (const auto it = failures.generations.find(surface); it != failures.generations.end()) {
             if (it->second == generation) {
-                counters.storageFallbacks.fetch_add(1, std::memory_order_relaxed);
+                AGC_DIAGNOSTIC(counters.storageFallbacks.fetch_add(1, std::memory_order_relaxed));
                 return nullptr;
             }
             failures.generations.erase(it);
@@ -260,7 +270,7 @@ std::shared_ptr<StorageTexture> sampledStorageSource(const Context& context, con
     try {
         return cachedStorageTexture(context, {}, resource, 0, guestBytes);
     } catch (const std::exception& error) {
-        counters.storageFallbacks.fetch_add(1, std::memory_order_relaxed);
+        AGC_DIAGNOSTIC(counters.storageFallbacks.fetch_add(1, std::memory_order_relaxed));
         std::lock_guard lock(failures.mutex);
         if (failures.generations.size() < 4096 && failures.generations.emplace(surface, generation).second) std::fprintf(stderr, "[textures] sampled texture 0x%llx (%ux%u format %u) keeps the snapshot path: %s\n", static_cast<unsigned long long>(resource.baseAddress), resource.width, resource.height, resource.format, error.what());
         return nullptr;
@@ -269,7 +279,7 @@ std::shared_ptr<StorageTexture> sampledStorageSource(const Context& context, con
 
 // `guestBytes` is the surface size when the caller described the surface already (0: described here).
 std::shared_ptr<Texture> cachedTexture(const Context& context, std::span<const std::uint32_t> words, const GuestTextureResource& resource, VkComponentMapping components, std::uint64_t guestBytes = 0, bool depthCompare = false) {
-    CaptureTrace::Log("sampled-lookup address=%llx width=%u height=%u dcc=%llx", static_cast<unsigned long long>(resource.baseAddress), resource.width, resource.height, static_cast<unsigned long long>(resource.dccAddress));
+    AGC_DIAGNOSTIC(CaptureTrace::Log("sampled-lookup address=%llx width=%u height=%u dcc=%llx", static_cast<unsigned long long>(resource.baseAddress), resource.width, resource.height, static_cast<unsigned long long>(resource.dccAddress)));
     if (auto depth = DepthSurfaceTexture(context, words, resource, components)) return depth;
     const auto depthBitsWidth = words.size() >= 4 ? ShaderRecompiler::DepthBitsTextureWidth(words[1], words[3]) : 0u;
     if (depthBitsWidth == 32u) {
@@ -312,7 +322,11 @@ std::shared_ptr<Texture> cachedTexture(const Context& context, std::span<const s
                 std::snprintf(text, sizeof(text), "AGC graphics: sampled texture 0x%llx (%ux%u format %u, dcc 0x%llx) reads %s DCC keys filled over its pending image, a clear value the format has no encoding for", static_cast<unsigned long long>(resource.baseAddress), resource.width, resource.height, resource.format, static_cast<unsigned long long>(resource.dccAddress), DccKeysName(*keys));
                 throw std::runtime_error(text);
             }
+#if !defined(NDEBUG)
             static const bool traceKeys = std::getenv("APS5_TRACE_DCC_KEYS") != nullptr;
+#else
+            static constexpr bool traceKeys = false;
+#endif
             if (traceKeys) std::fprintf(stderr, "[dcc-keys] sampled 0x%llx through keys 0x%llx reads the %s fill, not the pending image\n", static_cast<unsigned long long>(address), static_cast<unsigned long long>(resource.dccAddress), DccKeysName(*keys));
             source.reset();
             clearThroughKeys = true;
@@ -391,7 +405,7 @@ std::shared_ptr<Texture> cachedTexture(const Context& context, std::span<const s
             // pages. The compare goes through the flush hook: it waits for recorded work over the
             // surface (counted, and named for the [hooksync] line).
             const auto equalsCommitted = [&] {
-                if (Recorder::SnapshotWriteOverlaps(address, bytes)) counters.pendingReads.fetch_add(1, std::memory_order_relaxed);
+                AGC_DIAGNOSTIC(if (Recorder::SnapshotWriteOverlaps(address, bytes)) counters.pendingReads.fetch_add(1, std::memory_order_relaxed););
                 const GuestMemory::ReadSiteScope site(GuestMemory::ReadSite::TextureCompare);
                 return GuestMemory::EqualsCommitted(address, it->bytes);
             };
@@ -412,19 +426,23 @@ std::shared_ptr<Texture> cachedTexture(const Context& context, std::span<const s
         entry.source = source;
         entry.sourceVersion = source->Version();
         entry.texture = std::make_shared<Texture>(context, source, resource, components);
-        counters.fromStorage.fetch_add(1, std::memory_order_relaxed);
+        AGC_DIAGNOSTIC(counters.fromStorage.fetch_add(1, std::memory_order_relaxed));
     } else {
         // Snapshot before the upload so a write racing with it is caught by the next comparison.
-        if (*keys == DccKeys::Uncompressed && Recorder::SnapshotWriteOverlaps(address, bytes)) counters.pendingReads.fetch_add(1, std::memory_order_relaxed);
+        AGC_DIAGNOSTIC(if (*keys == DccKeys::Uncompressed && Recorder::SnapshotWriteOverlaps(address, bytes)) counters.pendingReads.fetch_add(1, std::memory_order_relaxed););
         ReadTextureSurface(resource, *keys, entry.bytes);
+#if !defined(NDEBUG)
         static const bool traceTextures = std::getenv("APS5_TRACE_TEXTURES") != nullptr;
+#else
+        static constexpr bool traceTextures = false;
+#endif
         if (traceTextures) {
             std::size_t nonzero = 0;
             for (std::size_t i = 0; i < entry.bytes.size(); i += 64) nonzero += entry.bytes[i] != std::byte{0};
             std::fprintf(stderr, "[texture] 0x%llx %ux%u format %u tile %d: %zu of %zu sampled bytes nonzero\n", static_cast<unsigned long long>(resource.baseAddress), resource.width, resource.height, resource.format, static_cast<int>(resource.tileMode), nonzero, entry.bytes.size() / 64);
         }
         entry.texture = std::make_shared<Texture>(context, *context.detiler, resource, components, entry.bytes, depthCompare);
-        counters.snapshots.fetch_add(1, std::memory_order_relaxed);
+        AGC_DIAGNOSTIC(counters.snapshots.fetch_add(1, std::memory_order_relaxed));
     }
     constexpr std::uint64_t budget = 2048ull << 20u;
     while (!cache.entries.empty() && cache.bytes + entry.accounted > budget) eraseTexture(cache, std::prev(cache.entries.end()));
@@ -535,7 +553,7 @@ std::shared_ptr<StorageTexture> cachedStorageTexture(const Context& context, std
     if (it != cache.entries.end()) {
         it->texture->Refresh();
         cache.entries.splice(cache.entries.begin(), cache.entries, it);
-        counters.storageHits.fetch_add(1, std::memory_order_relaxed);
+        AGC_DIAGNOSTIC(counters.storageHits.fetch_add(1, std::memory_order_relaxed));
         if (profile) LookupOutcomes::Add(LookupOutcomes::StorageHit, start);
         return it->texture;
     }
@@ -559,7 +577,7 @@ std::shared_ptr<StorageTexture> cachedStorageTexture(const Context& context, std
     cache.index[key] = cache.entries.begin();
     cache.byImage[texture.get()] = cache.entries.begin();
     texture->SetCached(true);
-    counters.storageCreated.fetch_add(1, std::memory_order_relaxed);
+    AGC_DIAGNOSTIC(counters.storageCreated.fetch_add(1, std::memory_order_relaxed));
     if (profile) LookupOutcomes::Add(LookupOutcomes::StorageMade, start);
     return texture;
 }
@@ -764,7 +782,11 @@ BuildProfile& Builds() {
 }
 
 bool BuildProfiled() {
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     return profile;
 }
 
@@ -823,7 +845,11 @@ double ShaderResources::phase(BuildPhase which) {
 }
 
 void ShaderResources::buildPrepare(std::span<const CompiledShader> shaders, const ColorTarget* target, std::uint64_t indexAddress, std::size_t indexBytes) {
+#if !defined(NDEBUG)
     const auto stageStart = std::chrono::steady_clock::now();
+#else
+    const std::chrono::steady_clock::time_point stageStart{};
+#endif
     phaseStart = stageStart;
     if (BuildProfiled()) {
         auto& profile = ThreadBuilds();
@@ -949,7 +975,11 @@ void ShaderResources::buildPrepare(std::span<const CompiledShader> shaders, cons
 }
 
 void ShaderResources::buildComplete() {
+#if !defined(NDEBUG)
     const auto stageStart = std::chrono::steady_clock::now();
+#else
+    const std::chrono::steady_clock::time_point stageStart{};
+#endif
     phaseStart = stageStart;
     try {
         // The lookups run in plan order: Revalidate walks the bindings the same way, and consecutive
@@ -1097,8 +1127,13 @@ void ShaderResources::noteReusable() {
 
 // APS5_PROFILE_DRAW: the per-device descriptor caches' counters, every 10 s.
 void ShaderResources::reportDescriptorCaches() const {
+#if !defined(NDEBUG)
     static std::mutex reportMutex;
+#if !defined(NDEBUG)
     static auto lastReport = std::chrono::steady_clock::now();
+#else
+    static std::chrono::steady_clock::time_point lastReport{};
+#endif
     const auto now = std::chrono::steady_clock::now();
     std::lock_guard lock(reportMutex);
     if (now - lastReport < std::chrono::seconds(10)) return;
@@ -1107,6 +1142,9 @@ void ShaderResources::reportDescriptorCaches() const {
     const auto samplerHits = context.samplerCache != nullptr ? context.samplerCache->Hits() : 0;
     const auto samplerMisses = context.samplerCache != nullptr ? context.samplerCache->Misses() : 0;
     std::fprintf(stderr, "[descriptors] layouts %llu hits / %llu created, sets %llu from %llu pools, samplers %llu hits / %llu created\n", static_cast<unsigned long long>(descriptors.layoutHits), static_cast<unsigned long long>(descriptors.layoutMisses), static_cast<unsigned long long>(descriptors.sets), static_cast<unsigned long long>(descriptors.pools), static_cast<unsigned long long>(samplerHits), static_cast<unsigned long long>(samplerMisses));
+#else
+
+#endif
 }
 
 std::vector<std::uint32_t> ShaderResources::ContentKey(const CompiledShader& shader, bool dataWords) {
@@ -1231,7 +1269,7 @@ void countOwnRefreshFallback(OwnRefreshFallback reason) {
 }
 
 void countOwnRefresh(bool storage) {
-    TextureCounts().ownRefreshes.fetch_add(1, std::memory_order_relaxed);
+    AGC_DIAGNOSTIC(TextureCounts().ownRefreshes.fetch_add(1, std::memory_order_relaxed));
     if (BuildProfiled()) (storage ? Revalidations().ownStorageRefreshes : Revalidations().ownViewRefreshes).fetch_add(1, std::memory_order_relaxed);
 }
 
@@ -1589,7 +1627,11 @@ ShaderResources::OwnRefreshFallback ShaderResources::refreshOwnObjects(std::span
 bool ShaderResources::Revalidate(std::span<const CompiledShader> shaders, ProofReport* report) {
     if (report != nullptr) *report = {ProofPath::Full, ProofFailure::Other};
     if (!reusable || shaders.empty()) return false;
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     // APS5_NO_FAST_REVALIDATE=1 always repeats the lookups.
     static const bool noFast = std::getenv("APS5_NO_FAST_REVALIDATE") != nullptr;
     const auto start = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
@@ -1779,7 +1821,11 @@ struct ChurnProfile {
     std::unordered_map<std::uint64_t, ResourceCache::Key> lastByVariant;
     ChurnCounts dispatch;
     ChurnCounts draws;
+#if !defined(NDEBUG)
     std::chrono::steady_clock::time_point lastReport = std::chrono::steady_clock::now();
+#else
+    std::chrono::steady_clock::time_point lastReport{};
+#endif
 };
 
 ChurnProfile& Churn() {
@@ -1845,7 +1891,11 @@ std::shared_ptr<ShaderResources> ResourceCache::Find(const Key& key) {
 }
 
 void ResourceCache::noteMiss(const Key& key) {
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     if (!profile || key.size() < 5) return;
     // The variant(s) the key belongs to: a compute key starts with the data-words flag, the stage
     // and its variant, a draw key with a marker, the device and its stages' keys (Draw.cpp
@@ -2093,8 +2143,8 @@ std::size_t ShaderResources::addGuestBuffer(std::span<const std::uint32_t> words
     }
     if (BuildProfiled()) {
         auto& counters = BufferWrites();
-        counters.elements.fetch_add(1, std::memory_order_relaxed);
-        if (!written) counters.readOnly.fetch_add(1, std::memory_order_relaxed);
+        AGC_DIAGNOSTIC(counters.elements.fetch_add(1, std::memory_order_relaxed));
+        if (!written) AGC_DIAGNOSTIC(counters.readOnly.fetch_add(1, std::memory_order_relaxed));
     }
     allocations.push_back({address, size, true, nullptr, ShaderRecompiler::DescriptorRole::ShaderData, written});
     return allocations.size() - 1;
@@ -2133,7 +2183,11 @@ std::string ShaderResources::Describe() const {
         }
     }
     // APS5_TRACE_DISPATCH_IO=2 also lists the words of small buffers (constants).
+#if !defined(NDEBUG)
     static const bool words = [] { const char* value = std::getenv("APS5_TRACE_DISPATCH_IO"); return value != nullptr && value[0] == '2'; }();
+#else
+    static constexpr bool words = false;
+#endif
     const auto appendWords = [&](const std::uint32_t* data, std::size_t bytes) {
         if (!words || bytes > 0x200) return;
         text += " [";
@@ -2364,7 +2418,7 @@ bool ShaderResources::precollectImages() {
                         record.source = it->source;
                         record.entryKeys = it->keys;
                         record.entryGeneration = it->generation;
-                        counters.records.fetch_add(1, std::memory_order_relaxed);
+                        AGC_DIAGNOSTIC(counters.records.fetch_add(1, std::memory_order_relaxed));
                     }
                 }
             } catch (const std::exception&) {
@@ -2578,7 +2632,7 @@ std::shared_ptr<ShaderResources::DrawBindings> ShaderResources::PrepareDrawBindi
         std::memcpy(buffer->Bytes().data(), reinterpret_cast<const void*>(begin), bytes);
         selected.push_back(index);
         result->snapshots.push_back({begin, std::move(buffer)});
-        CaptureTrace::Log("draw-snapshot batch=%llu address=%llx bytes=%zu", static_cast<unsigned long long>(recorder.Submissions() + 1), static_cast<unsigned long long>(begin), bytes);
+        AGC_DIAGNOSTIC(CaptureTrace::Log("draw-snapshot batch=%llu address=%llx bytes=%zu", static_cast<unsigned long long>(recorder.Submissions() + 1), static_cast<unsigned long long>(begin), bytes));
     }
     if (selected.empty()) return {};
     Require(context.descriptorCache != nullptr, "draw snapshots require a descriptor cache");
@@ -2666,7 +2720,7 @@ void ShaderResources::MarkGpuWrites(Recorder& recorder) {
     auto& counters = BufferWrites();
     // Recorded uses only (dispatches and recorded draws): a synchronous draw writes back in
     // WriteBack() and publishes no pending writes, so it has no notes to skip.
-    counters.notesSkipped.fetch_add(readOnlyBuffers, std::memory_order_relaxed);
+    AGC_DIAGNOSTIC(counters.notesSkipped.fetch_add(readOnlyBuffers, std::memory_order_relaxed));
     const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
     auto last = counters.lastReport.load();
     if (nowMs - last < 10000 || !counters.lastReport.compare_exchange_strong(last, nowMs)) return;
@@ -2710,3 +2764,5 @@ bool ShaderResources::ReadsImage(const StorageTexture* image) const {
 }
 
 }
+
+#undef AGC_DIAGNOSTIC

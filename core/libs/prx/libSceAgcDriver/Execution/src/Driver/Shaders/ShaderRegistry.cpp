@@ -84,7 +84,11 @@ void Driver::RegisterShader(const Shader* shader) {
     snapshot.header.resize(shader->header_size);
     std::memcpy(snapshot.header.data(), shader, shader->header_size);
 
+#if !defined(NDEBUG)
     static const char* traceRegs = std::getenv("APS5_TRACE_SHADER_REGS");
+#else
+    static const char* traceRegs = nullptr;
+#endif
     if (traceRegs != nullptr && (std::string(traceRegs) == "all" || std::strtoull(traceRegs, nullptr, 16) == snapshot.codeAddress)) {
         std::fprintf(stderr, "[shader] 0x%llx type %u cx", static_cast<unsigned long long>(snapshot.codeAddress), shader->type);
         for (std::uint32_t i = 0; i < shader->num_cx_registers && shader->cx_registers != nullptr; ++i) std::fprintf(stderr, " %x=%08x", shader->cx_registers[i].offset, shader->cx_registers[i].value);

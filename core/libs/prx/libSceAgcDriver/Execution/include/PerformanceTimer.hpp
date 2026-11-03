@@ -19,6 +19,7 @@
 
 namespace AgcDriver {
 
+#if !defined(NDEBUG)
 class FrameTiming {
 public:
     using Clock = std::chrono::steady_clock;
@@ -228,6 +229,40 @@ private:
     Clock::time_point start;
     Clock::time_point previous;
 };
+
+#else
+// Timing scopes retain their call signatures without clocks, TLS, maps, or counters in Release.
+class FrameTiming {
+public:
+    using Clock = std::chrono::steady_clock;
+    struct Metric {};
+    explicit constexpr FrameTiming(std::uint64_t) noexcept {}
+    static constexpr Metric* Get(const char*, const char*) noexcept { return nullptr; }
+    static constexpr void Add(Metric*, Clock::duration, std::uint64_t = 0) noexcept {}
+    static constexpr void IncludeSubmission(std::uint64_t, Clock::time_point, Clock::time_point, Clock::time_point, bool) noexcept {}
+    static constexpr void SetFlip(std::uint64_t, std::size_t, Clock::time_point, Clock::time_point) noexcept {}
+    static constexpr Clock::time_point FlipReached() noexcept { return {}; }
+    static constexpr void NoteFlipBatches(std::uint64_t, std::uint64_t) noexcept {}
+    static constexpr std::uint64_t BatchesAtFlip() noexcept { return 0; }
+    static constexpr void NoteBlit(std::uint64_t, Clock::time_point, Clock::time_point) noexcept {}
+    static constexpr void NoteRetired(std::uint64_t, double, double) noexcept {}
+    static constexpr void Print(std::uint32_t, std::int32_t, std::int64_t, Clock::time_point, Clock::duration) noexcept {}
+};
+class PerformanceContext {
+public:
+    explicit constexpr PerformanceContext(FrameTiming*) noexcept {}
+    static constexpr FrameTiming* Current() noexcept { return nullptr; }
+    PerformanceContext(const PerformanceContext&) = delete;
+    PerformanceContext& operator=(const PerformanceContext&) = delete;
+};
+class PerformanceTimer {
+public:
+    explicit constexpr PerformanceTimer(const char*) noexcept {}
+    static constexpr void Mark(const char*, std::uint64_t = 0) noexcept {}
+    PerformanceTimer(const PerformanceTimer&) = delete;
+    PerformanceTimer& operator=(const PerformanceTimer&) = delete;
+};
+#endif
 
 }
 

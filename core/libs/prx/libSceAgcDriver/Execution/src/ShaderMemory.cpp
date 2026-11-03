@@ -60,7 +60,11 @@ bool WordwisePages() {
 }
 
 bool CaptureProfiled() {
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     return profile;
 }
 

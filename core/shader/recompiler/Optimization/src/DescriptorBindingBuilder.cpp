@@ -22,8 +22,12 @@ namespace {
 // elements the program may store to and how many it only loads (this call and cumulative), so the
 // replay tool shows what a driver gains from DescriptorBinding::bufferWritten.
 bool bufferWrittenTraceEnabled() {
+#if !defined(NDEBUG)
     static const bool enabled = std::getenv("APS5_TRACE_BUFFER_WRITTEN") != nullptr;
     return enabled;
+#else
+    return false;
+#endif
 }
 struct BufferWrittenCounts {
     std::atomic<unsigned long long> written{0};
@@ -282,6 +286,7 @@ void DescriptorBindingBuilder::Populate(BindingAllocationResult& allocation, con
         bindings.push_back(std::move(physical));
     }
 
+#if !defined(NDEBUG)
     if (bufferWrittenTraceEnabled()) {
         // Cumulative counts include every Populate of the process (the replay tool populates
         // each program twice), so the per-call counts are the ones to sum per program.
@@ -289,6 +294,7 @@ void DescriptorBindingBuilder::Populate(BindingAllocationResult& allocation, con
         const auto readOnly = bufferWrittenCounts.readOnly.fetch_add(readOnlyHere) + readOnlyHere;
         std::fprintf(stderr, "[bindings] guest buffer elements: %zu written, %zu read-only (total so far: %llu / %llu)\n", writtenHere, readOnlyHere, written, readOnly);
     }
+#endif
     allocation.bindings = std::move(bindings);
     allocation.pushConstants.clear();
     if (layout.UsesPushData()) {

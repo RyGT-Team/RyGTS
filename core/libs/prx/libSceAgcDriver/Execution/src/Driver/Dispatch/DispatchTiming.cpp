@@ -4,6 +4,7 @@
 namespace AgcDriver::DriverDetail {
 
 void Driver::addDriverPhases(DispatchClass which, const std::array<double, DriverPhaseCount>& ms, bool hit, bool validated) {
+#if !defined(NDEBUG)
     std::lock_guard lock(driverPhasesMutex);
     auto& totals = driverPhaseTotals[which];
     for (std::size_t i = 0; i < DriverPhaseCount; ++i) totals.ms[i] += ms[i];
@@ -28,6 +29,9 @@ void Driver::addDriverPhases(DispatchClass which, const std::array<double, Drive
         std::fprintf(stderr, "[dispatch] driver phases %s (10 s, %llu dispatches, %llu cache hits), us per dispatch:%s, total %.1f (%.1f ms); validate %.1f us per validation (%llu validations; GPU waits inside it %.1f us per validation apart)\n", DispatchClassNames[cls], static_cast<unsigned long long>(line.dispatches), static_cast<unsigned long long>(line.hits), report.c_str(), total * 1000 / static_cast<double>(line.dispatches), total, line.ms[PhaseValidate] * perValidation, static_cast<unsigned long long>(line.validations), line.ms[PhaseValidateWait] * perValidation);
         line = {};
     }
+#else
+
+#endif
 }
 
 PendingDispatchPhases& Driver::pendingDispatchPhases() {
@@ -41,17 +45,25 @@ std::chrono::steady_clock::time_point& Driver::packetStartedAt() {
 }
 
 double DispatchPhaseTiming::Elapsed() {
+#if !defined(NDEBUG)
     const auto now = std::chrono::steady_clock::now();
     const auto ms = std::chrono::duration<double, std::milli>(now - lap).count();
     lap = now;
     return ms;
+#else
+    return 0;
+#endif
 }
 
 void DispatchPhaseTiming::Phase(DriverPhase which) {
+#if !defined(NDEBUG)
     if (!profile) return;
     const auto now = std::chrono::steady_clock::now();
     phaseMs[which] += std::chrono::duration<double, std::milli>(now - phaseLap).count();
     phaseLap = now;
+#else
+
+#endif
 }
 
 }

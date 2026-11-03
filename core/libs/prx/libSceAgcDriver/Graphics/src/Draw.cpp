@@ -30,6 +30,12 @@
 #include <set>
 #include <utility>
 
+#if !defined(NDEBUG)
+#define AGC_DIAGNOSTIC(...) __VA_ARGS__
+#else
+#define AGC_DIAGNOSTIC(...) ((void)0)
+#endif
+
 namespace AgcDriver::Graphics {
 
 namespace {
@@ -270,7 +276,11 @@ struct DrawProfile {
     // Draw packets that drew nothing, by DrawSkip, and their time.
     std::array<std::uint64_t, static_cast<std::size_t>(DrawSkip::Count)> skips{};
     std::array<double, static_cast<std::size_t>(DrawSkip::Count)> skipUs{};
+#if !defined(NDEBUG)
     std::chrono::steady_clock::time_point lastReport = std::chrono::steady_clock::now();
+#else
+    std::chrono::steady_clock::time_point lastReport{};
+#endif
 };
 constexpr std::array<const char*, static_cast<std::size_t>(DrawSkip::Count)> DrawSkipNames{"nothing to draw", "prechecked", "thrown"};
 
@@ -281,6 +291,7 @@ DrawProfile& Profile() {
 
 // Adds one draw's phases to the totals and prints the [draws] and [rescache] lines every 10 s.
 void reportDraw(const std::array<double, PhaseCount>& us, const ShaderResources::BuildTiming* built, const DrawOutcome& outcome) {
+#if !defined(NDEBUG)
     auto& profile = Profile();
     std::lock_guard lock(profile.mutex);
     double drawUs = 0;
@@ -396,10 +407,17 @@ void reportDraw(const std::array<double, PhaseCount>& us, const ShaderResources:
     profile.indirectReadUs = 0;
     profile.skips.fill(0);
     profile.skipUs.fill(0);
+#else
+
+#endif
 }
 
 void countCache(std::uint64_t DrawProfile::*counter) {
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     if (!profile) return;
     auto& stats = Profile();
     std::lock_guard lock(stats.mutex);
@@ -604,7 +622,11 @@ const char* IndirectDrawPathName(IndirectDrawPath path) {
 }
 
 void CountIndirectDraw(IndirectDrawPath path, double readMs, bool rewritten) {
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     if (!profile) return;
     auto& stats = Profile();
     std::lock_guard lock(stats.mutex);
@@ -614,7 +636,11 @@ void CountIndirectDraw(IndirectDrawPath path, double readMs, bool rewritten) {
 }
 
 void CountDrawSkip(DrawSkip kind, double us) {
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     if (!profile) return;
     auto& stats = Profile();
     std::lock_guard lock(stats.mutex);
@@ -637,6 +663,7 @@ namespace {
 
 // APS5_PROFILE_DRAW: the per-phase timers of one draw (DrawPhase), shared by Draw's parts and
 // DrawWithRecipe.
+#if !defined(NDEBUG)
 struct DrawTimer {
     bool profile;
     std::chrono::steady_clock::time_point phaseStart;
@@ -650,12 +677,26 @@ struct DrawTimer {
     }
 };
 
+#else
+struct DrawTimer {
+    static constexpr bool profile = false;
+    static constexpr std::array<double, PhaseCount> us{};
+    explicit constexpr DrawTimer(bool) noexcept {}
+    static constexpr void phase(DrawPhase) noexcept {}
+};
+#endif
+
 // One line per draw with the phases that took time (APS5_TRACE_DRAWS), and the 10 s totals.
 // `waitedBefore` is the thread's GPU waits at the draw's start and `ownWaitedMs` the draw's own
 // syncs (see DrawOutcome::hookWaitUs).
 void reportDrawEnd(const State& state, const DrawTimer& timer, const ShaderResources::BuildTiming* built, DrawOutcome& outcome, double waitedBefore, double ownWaitedMs, const char* suffix) {
+#if !defined(NDEBUG)
     if (!timer.profile) return;
+#if !defined(NDEBUG)
     static const bool traceDraws = std::getenv("APS5_TRACE_DRAWS") != nullptr;
+#else
+    static constexpr bool traceDraws = false;
+#endif
     outcome.hookWaitUs = std::max(0.0, Recorder::ThreadWaitedMs() - waitedBefore - ownWaitedMs) * 1000.0;
     outcome.ownSyncUs = ownWaitedMs * 1000.0;
     if (traceDraws) {
@@ -668,6 +709,9 @@ void reportDrawEnd(const State& state, const DrawTimer& timer, const ShaderResou
         std::fprintf(stderr, "%s\n", line);
     }
     reportDraw(timer.us, built, outcome);
+#else
+
+#endif
 }
 
 // The draw's inputs before its resources (prepareDrawInputs): the validated parameters, the index
@@ -800,7 +844,11 @@ DrawInputs prepareDrawInputs(const Context& context, const State& state, const P
 // [draws] target-lookup accounting. `lookup` makes (or finds) the image; DrawWithRecipe refreshes
 // the stored object instead.
 std::shared_ptr<StorageTexture> refreshResidentTarget(const Context& context, const State& state, const ColorTarget& color, DrawOutcome& outcome, bool profile, const std::function<std::shared_ptr<StorageTexture>()>& lookup) {
+#if !defined(NDEBUG)
     const auto lookupStart = std::chrono::steady_clock::now();
+#else
+    constexpr std::chrono::steady_clock::time_point lookupStart{};
+#endif
     const auto walkedBefore = profile ? GuestMemory::ThreadCollectedBytes() : 0;
     std::shared_ptr<StorageTexture> resident;
     try {
@@ -1100,12 +1148,17 @@ void pushDrawConstants(const Pipeline& pipeline, VkCommandBuffer commands, const
 // barriers are implicit in the submission and the fence. Then the kept objects, the completion
 // work and, for a waited-for draw, the recorder sync.
 bool CaptureInputsEnabled() {
+#if !defined(NDEBUG)
     static const bool enabled = std::getenv("APS5_CAPTURE_INPUTS") != nullptr;
+#else
+    static constexpr bool enabled = false;
+#endif
     Require(!enabled || CaptureTrace::Enabled(), "APS5_CAPTURE_INPUTS requires APS5_CAPTURE_TRACE");
     return enabled;
 }
 
 void captureInputs(const Context& context, Recorder& recorder, VkCommandBuffer commands, const ShaderResources& resources, const std::shared_ptr<ShaderResources::DrawBindings>& bindings, std::uint64_t target) {
+#if !defined(NDEBUG)
     struct Sample {
         std::uint64_t address;
         std::size_t offset;
@@ -1139,14 +1192,14 @@ void captureInputs(const Context& context, Recorder& recorder, VkCommandBuffer c
         if (bytes == 0 || bytes > 512) continue;
         if (bindings != nullptr && std::any_of(bindings->snapshots.begin(), bindings->snapshots.end(), [&](const auto& snapshot) { return snapshot.address < end && begin < snapshot.address + snapshot.buffer->Bytes().size(); })) continue;
         if (resources.WritesOverlap(begin, bytes) || recorder.PendingWriteOverlaps(begin, bytes)) {
-            CaptureTrace::Log("input-skip draw=%llu batch=%llu address=%llx bytes=%zu reason=gpu-writer", draw, batch, static_cast<unsigned long long>(begin), bytes);
+            AGC_DIAGNOSTIC(CaptureTrace::Log("input-skip draw=%llu batch=%llu address=%llx bytes=%zu reason=gpu-writer", draw, batch, static_cast<unsigned long long>(begin), bytes));
             continue;
         }
         const auto* imported = HostImportFor(context, begin, bytes);
         Require(imported != nullptr, "capture input has no host import");
         addSample(begin, bytes, imported->buffer, begin - imported->base, reinterpret_cast<const std::byte*>(begin));
     }
-    CaptureTrace::Log("input-capture draw=%llu batch=%llu target=%llx ranges=%zu bytes=%zu", draw, batch, static_cast<unsigned long long>(target), samples.size(), total);
+    AGC_DIAGNOSTIC(CaptureTrace::Log("input-capture draw=%llu batch=%llu target=%llx ranges=%zu bytes=%zu", draw, batch, static_cast<unsigned long long>(target), samples.size(), total));
     if (samples.empty()) return;
     auto readback = std::make_shared<Buffer>(context, total, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
     RecordMemoryBarrier(context, commands, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_HOST_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
@@ -1164,16 +1217,19 @@ void captureInputs(const Context& context, Recorder& recorder, VkCommandBuffer c
             for (std::size_t index = 0; index < sample.expected.size(); ++index) {
                 const auto gpu = actual[sample.offset + index];
                 if (sample.expected[index] == gpu) continue;
-                if (changed < 16) CaptureTrace::Log("input-byte draw=%llu batch=%llu address=%llx offset=%zu cpu=%02x gpu=%02x", draw, batch, static_cast<unsigned long long>(sample.address), index, std::to_integer<unsigned>(sample.expected[index]), std::to_integer<unsigned>(gpu));
+                if (changed < 16) AGC_DIAGNOSTIC(CaptureTrace::Log("input-byte draw=%llu batch=%llu address=%llx offset=%zu cpu=%02x gpu=%02x", draw, batch, static_cast<unsigned long long>(sample.address), index, std::to_integer<unsigned>(sample.expected[index]), std::to_integer<unsigned>(gpu)));
                 ++changed;
             }
             if (changed != 0) {
                 ++differences;
-                CaptureTrace::Log("input-mismatch draw=%llu batch=%llu target=%llx address=%llx bytes=%zu changed=%zu", draw, batch, static_cast<unsigned long long>(target), static_cast<unsigned long long>(sample.address), sample.expected.size(), changed);
+                AGC_DIAGNOSTIC(CaptureTrace::Log("input-mismatch draw=%llu batch=%llu target=%llx address=%llx bytes=%zu changed=%zu", draw, batch, static_cast<unsigned long long>(target), static_cast<unsigned long long>(sample.address), sample.expected.size(), changed));
             }
         }
-        CaptureTrace::Log("input-result draw=%llu batch=%llu ranges=%zu mismatched=%zu", draw, batch, samples.size(), differences);
+        AGC_DIAGNOSTIC(CaptureTrace::Log("input-result draw=%llu batch=%llu ranges=%zu mismatched=%zu", draw, batch, samples.size(), differences));
     });
+#else
+
+#endif
 }
 
 void recordDraw(const Context& context, const State& state, const Pm4::DrawParameters& draw, std::span<const CompiledShader> shaders, DrawInputs& inputs, RecordedDraw& record, DrawOutcome& outcome, DrawTimer& timer, double& ownWaitedMs) {
@@ -1294,7 +1350,11 @@ std::optional<State> maskedState(const State& state, const std::set<std::uint32_
 // Debug aid: APS5_DUMP_TARGETS=<n> saves the first n renders of every color target as a raw file
 // (u32 width, u32 height, u32 VkFormat, then tightly packed rows).
 int DumpTargetLimit() {
+#if !defined(NDEBUG)
     static const int dumpLimit = [] { const char* text = std::getenv("APS5_DUMP_TARGETS"); return text ? std::atoi(text) : 0; }();
+#else
+    static const int dumpLimit = {};
+#endif
     return dumpLimit;
 }
 
@@ -1322,13 +1382,21 @@ std::optional<std::string> KnownValidationFailure(const Context& context, std::s
 void Draw(const Context& context, const State& state, const Pm4::DrawParameters& draw, std::span<const CompiledShader> shaders, std::span<const GuestMemorySnapshot> snapshots, std::shared_ptr<const DrawRecipe>* recipeOut) {
     PerformanceTimer timing("Graphics.Draw");
     // APS5_PROFILE_DRAW prints the time of each phase of the draw (microseconds) and the [draws] totals.
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     DrawTimer timer(profile);
     // APS5_TRACE_DRAWS (together with APS5_PROFILE_DRAW; alone it only enables Driver.cpp's own
     // [draw] lines) additionally prints one line per draw with its phases and, for synchronous
     // draws, their inputs: per-draw string building at ~1400 draws per 10 s is itself a cost the
     // totals must not carry.
+#if !defined(NDEBUG)
     static const bool traceDraws = std::getenv("APS5_TRACE_DRAWS") != nullptr;
+#else
+    static constexpr bool traceDraws = false;
+#endif
     DrawOutcome outcome;
     const ShaderResources::BuildTiming* built = nullptr;
     // The thread's GPU waits so far: the difference at the report, less the draw's own syncs
@@ -1485,7 +1553,11 @@ void Draw(const Context& context, const State& state, const Pm4::DrawParameters&
         if (indirect.path != IndirectDrawPath::Gpu) {
             // The reads wait for the producing batch through the flush hook, as the driver's
             // resolve did for every indirect dispatch before its GPU path.
+#if !defined(NDEBUG)
             const auto readStart = std::chrono::steady_clock::now();
+#else
+            constexpr std::chrono::steady_clock::time_point readStart{};
+#endif
             const auto count = std::min(args->countIndirect ? Pm4::ReadDrawCount(*args) : args->count, args->count);
             records.reserve(count);
             for (std::uint32_t record = 0; record < count; ++record) records.push_back(Pm4::ReadDrawArguments(*args, record));
@@ -1825,7 +1897,11 @@ void Draw(const Context& context, const State& state, const Pm4::DrawParameters&
 DrawRecipeOutcome DrawWithRecipe(const Context& context, const State& state, const Pm4::DrawParameters& draw, std::span<const CompiledShader> shaders, std::span<const GuestMemorySnapshot> snapshots, const DrawRecipe& recipe) {
     static_cast<void>(snapshots);
     PerformanceTimer timing("Graphics.DrawWithRecipe");
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     DrawTimer timer(profile);
     DrawRecipeOutcome result;
     DrawOutcome outcome;
@@ -1955,3 +2031,5 @@ void RunColorMetadataPass(const Context& context, const ColorMetadataPass& pass)
 }
 
 }
+
+#undef AGC_DIAGNOSTIC

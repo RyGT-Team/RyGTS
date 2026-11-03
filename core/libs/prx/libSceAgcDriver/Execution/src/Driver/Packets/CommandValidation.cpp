@@ -35,7 +35,11 @@ void Driver::dumpPackets(std::span<const std::uint32_t> commands, const std::uin
         for (std::size_t j = offset + 1; j < std::min(commands.size(), offset + std::min<std::size_t>(Pm4::PacketWords(header), 12)); ++j) std::fprintf(stderr, " %08x", commands[j]);
         std::fprintf(stderr, "\n");
     }
+#if !defined(NDEBUG)
     static const bool dumpRejected = std::getenv("APS5_DUMP_REJECTED") != nullptr;
+#else
+    static const bool dumpRejected = {};
+#endif
     if (!dumpRejected) return;
     static int dumps = 0;
     char fileName[64];

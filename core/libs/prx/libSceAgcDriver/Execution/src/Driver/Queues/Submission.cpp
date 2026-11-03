@@ -118,7 +118,11 @@ void Driver::Submit(const Packet* packet, std::uint32_t queue) {
     require(descriptor.flags == 0, "nonzero submission flags are not implemented");
     Submission submission{};
     submission.queue = queue;
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     auto& costs = submissionCosts(queue);
     const auto start = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     if (descriptor.dw_num != 0) {
@@ -129,7 +133,11 @@ void Driver::Submit(const Packet* packet, std::uint32_t queue) {
     const auto copied = profile ? std::chrono::steady_clock::now() : start;
     validate(submission.commands, queue, descriptor.addr);
     waitForFlipRoom(submission);
+#if !defined(NDEBUG)
     static const bool trace = std::getenv("APS5_TRACE_GPU") != nullptr;
+#else
+    static constexpr bool trace = false;
+#endif
     if (trace) std::fprintf(stderr, "[gpu] %.1f submit queue=0x%x dwords=%zu at %p\n", TraceMs(), queue, submission.commands.size(), static_cast<const void*>(descriptor.addr));
     const auto validated = profile ? std::chrono::steady_clock::now() : start;
     {

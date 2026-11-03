@@ -109,6 +109,7 @@ bool IsFatal(DWORD code) {
     }
 }
 
+#if !defined(NDEBUG)
 // Debug aid: APS5_WATCH_WRITE=<guest ELF vaddr> reports every write to that 8-byte location by
 // making its page read-only and single-stepping each trapped write.
 std::uintptr_t g_watchAddress = 0;
@@ -391,13 +392,16 @@ void InstallWatch() {
     Report("[watch] watching 0x%llx (page 0x%llx)\n", static_cast<unsigned long long>(g_watchAddress), static_cast<unsigned long long>(g_watchPage));
 }
 
+#endif
 // SSE4a (EXTRQ / INSERTQ) is AMD-only: the PS5's Zen 2 has it and titles use it, so on an Intel host the
 // instruction raises STATUS_ILLEGAL_INSTRUCTION and is emulated on the faulting thread's CONTEXT.
 // APS5_NO_SSE4A_EMULATION=1 disables this (the fault is then reported as fatal as before) and
 // APS5_TRACE_SSE4A=1 prints each emulated instruction once per rip.
 bool g_sse4aEmulation = true;
+#if !defined(NDEBUG)
 bool g_sse4aTrace = false;
 std::atomic<unsigned long long> g_sse4aEmulated{0};
+#endif
 
 bool IsEnvironmentSet(const char* name) {
     const char* value = std::getenv(name);
@@ -417,6 +421,7 @@ std::size_t ReadCode(std::uint64_t address, std::uint8_t* buffer, std::size_t si
     return count;
 }
 
+#if !defined(NDEBUG)
 void TraceSse4a(std::uint64_t rip, const sse4a::Instruction& instruction, const sse4a::Field& field, unsigned long long count) {
     static std::mutex mutex;
     static std::uint64_t seen[128];
@@ -442,6 +447,7 @@ void TraceSse4a(std::uint64_t rip, const sse4a::Instruction& instruction, const 
     Report("[sse4a] #%llu %s %s (length %u, index %u, %u bytes) at %s on thread %lu\n", count, mnemonic, operands, field.length, field.index, static_cast<unsigned>(instruction.size), line, GetCurrentThreadId());
 }
 
+#endif
 bool HandleSse4a(EXCEPTION_POINTERS* info) {
     if (!g_sse4aEmulation) return false;
     const auto* record = info->ExceptionRecord;
@@ -453,8 +459,10 @@ bool HandleSse4a(EXCEPTION_POINTERS* info) {
     sse4a::Instruction instruction;
     sse4a::Field field;
     if (!sse4a::Emulate(bytes, available, *context, &instruction, &field)) return false;
+#if !defined(NDEBUG)
     const auto count = ++g_sse4aEmulated;
     if (g_sse4aTrace) TraceSse4a(rip, instruction, field, count);
+#endif
     return true;
 }
 
@@ -482,9 +490,14 @@ void TraceThrow(EXCEPTION_POINTERS* info) {
     constexpr DWORD GccThrow = 0x20474343;
     // On by default for the first 40 throws (a throw that escapes into game code ends the
     // process with no other trace); APS5_TRACE_THROW=1 reports every one, =0 none.
+#if !defined(NDEBUG)
     static const char* setting = std::getenv("APS5_TRACE_THROW");
     static const bool all = setting != nullptr && setting[0] == '1';
     static const bool none = setting != nullptr && setting[0] == '0';
+#else
+    constexpr bool all = false;
+    constexpr bool none = false;
+#endif
     static std::atomic<unsigned> reported{0};
     const auto* record = info->ExceptionRecord;
     if (none || record->ExceptionCode != GccThrow || record->NumberParameters < 1) return;
@@ -529,22 +542,26 @@ LONG WINAPI ReportCrash(EXCEPTION_POINTERS* info) {
         const int renderer = RendererHandlesFault(info);
         if (renderer == 1) return EXCEPTION_CONTINUE_EXECUTION;
         if (renderer == 2) {
+#if !defined(NDEBUG)
             static std::atomic<unsigned> passed{0};
             if (passed.fetch_add(1) < 20) {
                 std::fprintf(stderr, "[fault] passed to the renderer's guarded read: %p (rip %p)\n",
                              reinterpret_cast<void*>(fault->ExceptionInformation[1]), fault->ExceptionAddress);
             }
+#endif
             return EXCEPTION_CONTINUE_SEARCH;
         }
     }
     if (fault->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && fault->NumberParameters >= 2 && fault->ExceptionInformation[0] == 1 && GuestArena::GuestArenaHandleWrite_nid_postfix(fault->ExceptionInformation[1])) {
         // This unprotects the whole 16 KB view, including pages the renderer still tracks, so
         // it should only happen for writes the renderer has nothing to do with.
+#if !defined(NDEBUG)
         static std::atomic<unsigned> logged{0};
         if (logged.fetch_add(1) < 50) {
             std::fprintf(stderr, "[fault] Ryty resumed a write to %p the renderer did not handle (rip %p)\n",
                          reinterpret_cast<void*>(fault->ExceptionInformation[1]), fault->ExceptionAddress);
         }
+#endif
         return EXCEPTION_CONTINUE_EXECUTION;
     }
     if (fault->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && fault->NumberParameters >= 2) {
@@ -556,16 +573,20 @@ LONG WINAPI ReportCrash(EXCEPTION_POINTERS* info) {
         retries = address == lastAddress ? retries + 1 : 0;
         lastAddress = address;
         if (retries < 64 && GuestArena::GuestArenaAwaitRemap_nid_postfix(address, fault->ExceptionInformation[0] == 1)) {
+#if !defined(NDEBUG)
             static std::atomic<unsigned> logged{0};
             if (logged.fetch_add(1) < 20) {
                 std::fprintf(stderr, "[fault] waited for a guest remap at %p (rip %p)\n",
                              reinterpret_cast<void*>(address), fault->ExceptionAddress);
             }
+#endif
             return EXCEPTION_CONTINUE_EXECUTION;
         }
     }
+#if !defined(NDEBUG)
     if (HandleBreak(info)) return EXCEPTION_CONTINUE_EXECUTION;
     if (HandleWatch(info)) return EXCEPTION_CONTINUE_EXECUTION;
+#endif
     if (HandleSse4a(info)) return EXCEPTION_CONTINUE_EXECUTION;
     const auto* record = info->ExceptionRecord;
     if (!IsFatal(record->ExceptionCode)) return EXCEPTION_CONTINUE_SEARCH;
@@ -589,7 +610,11 @@ LONG WINAPI ReportCrash(EXCEPTION_POINTERS* info) {
         const std::size_t available = ReadCode(context->Rip, bytes, sizeof(bytes));
         char hex[3 * sizeof(bytes) + 1] = "";
         for (std::size_t i = 0; i < available; ++i) std::snprintf(hex + 3 * i, sizeof(hex) - 3 * i, "%02x ", bytes[i]);
+#if !defined(NDEBUG)
         Report("  bytes %s(sse4a emulation %s, %llu emulated so far)\n", hex, g_sse4aEmulation ? "on" : "off", g_sse4aEmulated.load());
+#else
+        Report("  bytes %s(sse4a emulation %s)\n", hex, g_sse4aEmulation ? "on" : "off");
+#endif
     }
     if (record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && record->NumberParameters >= 2) {
         const char* kind = record->ExceptionInformation[0] == 0 ? "read" : record->ExceptionInformation[0] == 1 ? "write" : "execute";
@@ -706,6 +731,7 @@ void InvalidParameterHandler(const wchar_t*, const wchar_t*, const wchar_t*, uns
     ReportBacktrace("UCRT invalid parameter");
 }
 
+#if !defined(NDEBUG)
 // Static destruction runs on the thread that ends the process (ExitProcess -> DLL_PROCESS_DETACH),
 // so its stack names the exit's caller when no libc exit/abort path was taken.
 struct ExitReporter {
@@ -714,6 +740,7 @@ struct ExitReporter {
     }
 } g_exitReporter;
 
+#endif
 const bool g_crashReportInstalled = [] {
     // The game's files (app0, _sd, user) are found relative to the working directory. Started
     // from a shortcut, the taskbar or Windows search, that is not the game's folder, and the
@@ -732,7 +759,9 @@ const bool g_crashReportInstalled = [] {
         }
     }
     g_sse4aEmulation = !IsEnvironmentSet("APS5_NO_SSE4A_EMULATION");
+#if !defined(NDEBUG)
     g_sse4aTrace = IsEnvironmentSet("APS5_TRACE_SSE4A");
+#endif
     AddVectoredExceptionHandler(1, ReportCrash);
     // An exception every handler passed on (the renderer's guarded reads pass faults to their
     // own structured handler): name it before the process ends without a report.
@@ -772,8 +801,10 @@ const bool g_crashReportInstalled = [] {
     });
     std::signal(SIGABRT, AbortSignalHandler);
     _set_invalid_parameter_handler(InvalidParameterHandler);
+#if !defined(NDEBUG)
     InstallWatch();
     InstallBreak();
+#endif
     return true;
 }();
 

@@ -106,8 +106,13 @@ __attribute__((noinline)) static ThreadFiberState& ThreadState() {
 }
 
 static bool TraceFibers() {
+#if !defined(NDEBUG)
+
     static const bool enabled = std::getenv("APS5_TRACE_FIBER") != nullptr;
     return enabled;
+#else
+    return false;
+#endif
 }
 
 static void CompletePendingSuspend() {

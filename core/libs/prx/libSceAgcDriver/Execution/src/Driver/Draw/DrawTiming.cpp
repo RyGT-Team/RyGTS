@@ -9,6 +9,7 @@ PendingDrawPhases& Driver::pendingDrawPhases() {
 }
 
 void Driver::addDrawPhases(const std::array<double, DrawDriverPhaseCount>& ms, bool drawn, std::uint64_t captures) {
+#if !defined(NDEBUG)
     std::lock_guard lock(drawPhasesMutex);
     auto& totals = drawPhaseTotals;
     for (std::size_t i = 0; i < DrawDriverPhaseCount; ++i) totals.ms[i] += ms[i];
@@ -29,13 +30,16 @@ void Driver::addDrawPhases(const std::array<double, DrawDriverPhaseCount>& ms, b
     std::fprintf(stderr, "[draw] driver phases (10 s, %llu draw packets, %llu drawn, %llu captures), us per packet:%s, total %.1f (%.1f ms; Graphics::Draw %.1f ms, skipped %.1f ms)\n", static_cast<unsigned long long>(totals.packets), static_cast<unsigned long long>(totals.drawn), static_cast<unsigned long long>(totals.captures), report.c_str(), total * 1000 / static_cast<double>(totals.packets), total, totals.ms[DrawRowGraphics], totals.ms[DrawRowSkipped]);
     totals.ms = {};
     totals.packets = totals.drawn = totals.captures = 0;
+#endif
 }
 
 void DrawPhaseTiming::Phase(DrawDriverPhase which) {
+#if !defined(NDEBUG)
     if (!profile) return;
     const auto now = std::chrono::steady_clock::now();
     phaseMs[which] += std::chrono::duration<double, std::milli>(now - phaseLap).count();
     phaseLap = now;
+#endif
 }
 
 }

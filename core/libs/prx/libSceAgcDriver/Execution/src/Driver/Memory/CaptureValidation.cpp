@@ -7,7 +7,11 @@ namespace AgcDriver::DriverDetail {
 
 bool Driver::captureStable(std::span<const ShaderRecompiler::MemoryRegion> captured) {
     using Policy = ShaderMemory::PendingWrite;
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     std::uint64_t ValidateCounters::*reason = &ValidateCounters::syncedOff;
     bool stable = true;
     std::uint64_t rawRegions = 0, mismatches = 0;
@@ -137,7 +141,11 @@ bool Driver::validateCaptured(std::uint64_t program, std::uint32_t queue, std::s
         return true;
     };
     if (pending.empty()) return compare(false);
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     const bool verify = validateSkipVerify();
     std::optional<SampledReadScope> ownSampling;
     auto& sample = sampling != nullptr ? *sampling : ownSampling;

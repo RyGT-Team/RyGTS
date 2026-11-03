@@ -37,10 +37,14 @@ bool Driver::storedSince(std::span<const std::uint32_t> packet, std::uint64_t ad
 }
 
 void Driver::traceLabel(std::span<const std::uint32_t> packet, std::uint32_t queue) {
+#if !defined(NDEBUG)
     static const std::uint64_t watched = [] {
         const char* value = std::getenv("APS5_TRACE_LABEL");
         return value ? std::strtoull(value, nullptr, 16) : 0ull;
     }();
+#else
+    static constexpr std::uint64_t watched = 0;
+#endif
     const auto opcode = (packet[0] >> 8u) & 0xffu;
     std::uint64_t target = 0;
     const char* kind = nullptr;

@@ -65,10 +65,14 @@ int APS5_VABI sceKernelWaitSema(KernelSema sem, int need, KernelUseconds* time) 
  } waiterGuard{sem};
  const auto generation = sem->cancelGeneration;
 
+#if !defined(NDEBUG)
  const auto waitStart = std::chrono::steady_clock::now();
  const auto traceWait = [&](bool timedOut) {
   KernelTraceWait_nid_postfix("sema", __builtin_return_address(0), static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - waitStart).count()), timedOut);
  };
+#else
+ constexpr auto traceWait = [](bool) {};
+#endif
  if (time == nullptr) {
   sem->condition.Wait(lock, [&] { return sem->tokenCount >= need || sem->deleted || sem->cancelGeneration != generation; });
   traceWait(false);

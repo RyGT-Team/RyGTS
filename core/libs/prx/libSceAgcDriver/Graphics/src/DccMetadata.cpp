@@ -76,7 +76,11 @@ ProofCounters& Proofs() {
 }
 
 bool ScanProfileEnabled() {
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     return profile;
 }
 
@@ -188,7 +192,11 @@ std::optional<DccKeys> MemoizedKeys(std::uint64_t begin, std::uint64_t end) {
 
 // Debug aid (APS5_TRACE_DCC_KEYS=1): every uncompressed key store, with the packet that made it.
 void TraceKeyStore(const char* path, std::uint64_t begin, std::size_t count) {
+#if !defined(NDEBUG)
     static const bool trace = std::getenv("APS5_TRACE_DCC_KEYS") != nullptr;
+#else
+    static constexpr bool trace = false;
+#endif
     if (!trace) return;
     const auto packet = GuestMemory::CurrentPacket();
     std::fprintf(stderr, "[dcc-keys] uncompressed keys stored on the %s: 0x%llx+0x%zx (packet 0x%x queue 0x%x)\n", path, static_cast<unsigned long long>(begin), count, packet.opcode, packet.queue);

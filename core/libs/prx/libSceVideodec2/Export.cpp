@@ -125,7 +125,9 @@ struct Decoder {
     std::uint32_t profile = 0;
     std::uint32_t level = 0;
     std::map<const void*, Picture> pictures;
+#if !defined(NDEBUG)
     std::uint64_t decoded = 0;
+#endif
     std::mutex mutex;
     AVCodecContext* context = nullptr;
     SwsContext* scaler = nullptr;
@@ -147,8 +149,12 @@ std::uint64_t nextDecoder = 1;
 std::uint64_t nextQueue = 1;
 
 bool Trace() {
+#if !defined(NDEBUG)
     static const bool trace = std::getenv("APS5_TRACE_VIDEODEC") != nullptr;
     return trace;
+#else
+    return false;
+#endif
 }
 
 std::uint32_t AlignUp(std::uint32_t value, std::uint32_t alignment) {
@@ -295,14 +301,18 @@ extern "C" {
 
 int APS5_VABI sceVideodec2QueryComputeMemoryInfo_nid_postfix(ComputeMemoryInfo* info) {
     if (!info) throw std::runtime_error("Videodec2: invalid argument pointer");
+#if !defined(NDEBUG)
     if (Trace()) std::fprintf(stderr, "[videodec2] QueryComputeMemoryInfo size=%llu\n", static_cast<unsigned long long>(info->thisSize));
+#endif
     info->cpuGpuMemorySize = WorkMemoryBytes;
     return 0;
 }
 
 int APS5_VABI sceVideodec2AllocateComputeQueue_nid_postfix(const ComputeConfigInfo* config, const ComputeMemoryInfo* memory, std::uint64_t* queue) {
     if (!config || !memory || !queue) throw std::runtime_error("Videodec2: invalid argument pointer");
+#if !defined(NDEBUG)
     if (Trace()) std::fprintf(stderr, "[videodec2] AllocateComputeQueue config=%llu memory=%llu\n", static_cast<unsigned long long>(config->thisSize), static_cast<unsigned long long>(memory->thisSize));
+#endif
     std::lock_guard guard(lock);
     *queue = nextQueue++;
     return 0;
@@ -315,7 +325,9 @@ int APS5_VABI sceVideodec2ReleaseComputeQueue_nid_postfix(std::uint64_t queue) {
 
 int APS5_VABI sceVideodec2QueryDecoderMemoryInfo_nid_postfix(const DecoderConfigInfo* config, DecoderMemoryInfo* memory) {
     if (!config || !memory) throw std::runtime_error("Videodec2: invalid argument pointer");
+#if !defined(NDEBUG)
     if (Trace()) std::fprintf(stderr, "[videodec2] QueryDecoderMemoryInfo config=%llu memory=%llu codec=%u profile=%u %dx%d dpb=%d\n", static_cast<unsigned long long>(config->thisSize), static_cast<unsigned long long>(memory->thisSize), config->codecType, config->profile, config->maxFrameWidth, config->maxFrameHeight, config->maxDpbFrameCount);
+#endif
     memory->cpuMemorySize = WorkMemoryBytes;
     memory->gpuMemorySize = WorkMemoryBytes;
     memory->cpuGpuMemorySize = WorkMemoryBytes;
@@ -352,8 +364,12 @@ int APS5_VABI sceVideodec2Decode_nid_postfix(std::uint64_t handle, const InputDa
     if (!found) throw std::runtime_error("Videodec2: invalid decoder handle");
     auto& decoder = *found;
     std::lock_guard guard(decoder.mutex);
+#if !defined(NDEBUG)
     if (Trace() && decoder.decoded < 3) std::fprintf(stderr, "[videodec2] Decode input=%llu frame=%llu output=%llu au=%llu pts=%llu size=%ux%u fb=%p/%llu\n", static_cast<unsigned long long>(input->thisSize), static_cast<unsigned long long>(frame ? frame->thisSize : 0), static_cast<unsigned long long>(output->thisSize), static_cast<unsigned long long>(input->auSize), static_cast<unsigned long long>(input->ptsData), decoder.width, decoder.height, frame ? frame->frameBuffer : nullptr, static_cast<unsigned long long>(frame ? frame->frameBufferSize : 0));
+#endif
+#if !defined(NDEBUG)
     ++decoder.decoded;
+#endif
     const Picture picture{input->ptsData, input->dtsData, input->attachedData};
     if (decoder.flushing) throw std::runtime_error("Videodec2: reset required after flushing");
     if (!input->auData || input->auSize == 0 || input->auSize > static_cast<std::uint64_t>(std::numeric_limits<int>::max())) throw std::runtime_error("Videodec2: invalid access unit");

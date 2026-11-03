@@ -7,6 +7,12 @@
 #include <cstdlib>
 #include <stdexcept>
 
+#if !defined(NDEBUG)
+#define AGC_DIAGNOSTIC(...) __VA_ARGS__
+#else
+#define AGC_DIAGNOSTIC(...) ((void)0)
+#endif
+
 namespace AgcDriver::DriverDetail {
 
 void Driver::dispatch(QueueState& queue, std::span<const std::uint32_t> packet, const Submission& submission, std::uint64_t indirectArguments) {
@@ -38,7 +44,11 @@ void Driver::dispatch(QueueState& queue, std::span<const std::uint32_t> packet, 
     if (indirectArguments != 0 && matchesFillKernel(std::span(snapshot.code).subspan(codeOffset), userData, compute)) {
 
         recordQueuedLabelsBeforeRead(submission.queue);
+#if !defined(NDEBUG)
         const auto readStart = std::chrono::steady_clock::now();
+#else
+        const std::chrono::steady_clock::time_point readStart{};
+#endif
         resolved = Pm4::ReadDispatchArguments(indirectArguments, packet[4]);
         countIndirect(IndirectFillKernel, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - readStart).count());
         packet = resolved;
@@ -64,11 +74,19 @@ void Driver::dispatch(QueueState& queue, std::span<const std::uint32_t> packet, 
         localDevice->Target(),
         {0, 0, 0, 128}
     };
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     static double captureMs = 0, keyMs = 0, recompileMs = 0, deviceMs = 0;
     static std::uint64_t cacheHits = 0;
     static std::uint64_t dispatches = 0;
+#if !defined(NDEBUG)
     auto lap = std::chrono::steady_clock::now();
+#else
+    std::chrono::steady_clock::time_point lap{};
+#endif
 
     std::array<double, DriverPhaseCount> phaseMs{};
     auto phaseLap = lap;
@@ -142,7 +160,11 @@ void Driver::dispatch(QueueState& queue, std::span<const std::uint32_t> packet, 
     bool missedDiffering = false;
     std::shared_ptr<const ShaderRecompiler::ResourceCapture> capture;
 
+#if !defined(NDEBUG)
     static const bool traceCache = std::getenv("APS5_TRACE_DISPATCH_CACHE") != nullptr;
+#else
+    static constexpr bool traceCache = false;
+#endif
     if (traceCache) {
         std::lock_guard traceLock(dispatchCacheMutex);
         struct Last { std::vector<std::uint32_t> userData; std::map<std::uint32_t, std::uint32_t> shader; std::uint64_t key; };
@@ -178,12 +200,16 @@ void Driver::dispatch(QueueState& queue, std::span<const std::uint32_t> packet, 
     phaseTiming.Phase(PhaseKey);
     lookupDispatch(address, submission, key, noDispatchCache, traceCache, profile, memory, phaseTiming, phaseMs, compiledResult, keepVariant, captured, liveWords, dataHit, cached, validated, missedEntry, missedDiffering);
     if (cached) {
-        captureMs += phaseTiming.Elapsed();
+        AGC_DIAGNOSTIC(captureMs += phaseTiming.Elapsed());
     } else {
         shaderMemory = std::make_shared<ShaderMemory>(memory, &queryPendingWrite, &observePendingWrite, hookWaitCounter());
         std::uint64_t forgetAtCapture = 0;
 
+#if !defined(NDEBUG)
         static const bool dumpShaders = std::getenv("APS5_DUMP_SHADERS") != nullptr;
+#else
+        static const bool dumpShaders = {};
+#endif
         try {
 
             struct ProbeScope {
@@ -201,18 +227,26 @@ void Driver::dispatch(QueueState& queue, std::span<const std::uint32_t> packet, 
             captured = shaderMemory->Regions();
             request.context.memory = captured;
             if (traceCapSync()) traceCapture("dispatch-capture", address, submission.queue, captured, Graphics::Recorder::ThreadWaitedMs() - waitedBefore);
-            captureMs += phaseTiming.Elapsed();
+            AGC_DIAGNOSTIC(captureMs += phaseTiming.Elapsed());
             phaseTiming.Phase(PhaseCapture);
             if (dumpShaders) static_cast<void>(dumpRequest(address, request));
+#if !defined(NDEBUG)
             const auto started = std::chrono::steady_clock::now();
+#else
+            const std::chrono::steady_clock::time_point started{};
+#endif
 
             static const bool reuseCapture = std::getenv("APS5_NO_CAPTURE_REUSE") == nullptr;
             bool memoHit = false;
             compiledResult = reuseCapture ? ShaderRecompiler::Recompile(request, *capture, &memoHit) : std::make_shared<const ShaderRecompiler::RecompileResult>(ShaderRecompiler::Recompile(request));
-            if (compiledResult->cacheHit || memoHit) ++cacheHits;
+            if (compiledResult->cacheHit || memoHit) AGC_DIAGNOSTIC(++cacheHits);
+#if !defined(NDEBUG)
             const auto elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+#else
+            constexpr double elapsed = 0;
+#endif
             static double totalMs = 0;
-            totalMs += elapsed;
+            AGC_DIAGNOSTIC(totalMs += elapsed);
             if (profile && elapsed > 200) std::fprintf(stderr, "[gpu] compute shader 0x%llx recompile took %.0f ms (%zu SPIR-V words, %zu captured regions, total %.1f s)\n", static_cast<unsigned long long>(address), elapsed, compiledResult->spirv.size(), captured.size(), totalMs / 1000);
         } catch (const std::exception& error) {
             const auto dump = dumpShaders ? dumpRequest(address, request) : std::string{};
@@ -224,7 +258,7 @@ void Driver::dispatch(QueueState& queue, std::span<const std::uint32_t> packet, 
             else std::snprintf(where, sizeof(where), "compute shader 0x%llx (%s): ", static_cast<unsigned long long>(address), dump.c_str());
             throw std::runtime_error(where + reason);
         }
-        recompileMs += phaseTiming.Elapsed();
+        AGC_DIAGNOSTIC(recompileMs += phaseTiming.Elapsed());
         phaseTiming.Phase(PhaseRecompile);
         insertDispatch(address, key, noDispatchCache, profile, it->second, forgetAtCapture, memory, shaderMemory, captured, capture, compiledResult, missedEntry, missedDiffering, attachVariant, phaseTiming);
     }
@@ -246,7 +280,11 @@ void Driver::dispatch(QueueState& queue, std::span<const std::uint32_t> packet, 
             groups[axis] = (groups[axis] + threads - 1) / threads;
         }
     }
+#if !defined(NDEBUG)
     static const bool traceIo = std::getenv("APS5_TRACE_DISPATCH_IO") != nullptr;
+#else
+    static constexpr bool traceIo = false;
+#endif
     if (traceIo) {
 
         std::string words;
@@ -349,7 +387,7 @@ void Driver::dispatch(QueueState& queue, std::span<const std::uint32_t> packet, 
     }
     phaseTiming.Phase(PhaseDevice);
     if (noteWrites && !writerKeyedEvidence()) noteWrittenBuffers(address, submission.queue, compiled);
-    deviceMs += phaseTiming.Elapsed();
+    AGC_DIAGNOSTIC(deviceMs += phaseTiming.Elapsed());
     phaseTiming.Phase(PhaseTail);
     if (profile) {
         auto& pending = pendingDispatchPhases();
@@ -364,3 +402,5 @@ void Driver::dispatch(QueueState& queue, std::span<const std::uint32_t> packet, 
 }
 
 }
+
+#undef AGC_DIAGNOSTIC
