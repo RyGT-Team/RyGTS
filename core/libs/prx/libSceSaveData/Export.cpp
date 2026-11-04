@@ -24,6 +24,7 @@
 
 namespace {
 // Logs the first three calls of each entry point, then stays silent, keeping guest logs readable.
+#ifndef NDEBUG
 #define SAVEDATA_TRACE(...) \
     do { \
         static std::atomic<int> traceCount{0}; \
@@ -33,6 +34,9 @@ namespace {
             std::fflush(stderr); \
         } \
     } while (0)
+#else
+#define SAVEDATA_TRACE(...) do {} while (0)
+#endif
 }  // namespace
 
 extern "C" {
@@ -124,8 +128,11 @@ static void WaitForBootScreen() {
         char name[64];
         std::snprintf(name, sizeof(name), "Local\\RytyFirstDraw-%lu", GetCurrentProcessId());
         if (HANDLE event = CreateEventA(nullptr, TRUE, FALSE, name)) {
+#ifndef NDEBUG
             const DWORD start = GetTickCount();
+#endif
             const DWORD result = WaitForSingleObject(event, 20000);
+            (void)result;
             SAVEDATA_TRACE("waited %lu ms for the boot screen before the first save access: %s", GetTickCount() - start,
                            result == WAIT_OBJECT_0 ? "drawn" : "timed out");
             CloseHandle(event);
