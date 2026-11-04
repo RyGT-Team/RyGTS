@@ -107,6 +107,8 @@ void AudioOut2ReleasePorts(const AudioOut2Context& context) {
 }
 
 static void TraceAttribute(AudioOut2PortHandle handle, const AudioOut2Port& port, const AudioOut2Attribute& attribute, const char* verdict) {
+#if !defined(NDEBUG)
+
     if (!AudioOut2TraceEnabled()) return;
     char values[128] = "";
     if (attribute.value != nullptr) {
@@ -123,6 +125,7 @@ static void TraceAttribute(AudioOut2PortHandle handle, const AudioOut2Port& port
     std::fprintf(stderr, "[audioout2] t=%.3f port %llu set attribute id=0x%x size=%zu value=%p%s: %s (data sets so far %llu)\n",
         AudioOut2TraceSeconds(), static_cast<unsigned long long>(handle), attribute.attribute_id, attribute.value_size, attribute.value, values, verdict,
         static_cast<unsigned long long>(port.dataSets));
+#endif
 }
 
 extern "C" {
@@ -189,14 +192,18 @@ int APS5_VABI sceAudioOut2PortSetAttributes(AudioOut2PortHandle port, const Audi
             verdict = "null value";
         } else if (attribute.attribute_id == ATTRIBUTE_DATA && attribute.value_size == sizeof(entry->data)) {
             std::memcpy(&entry->data, attribute.value, sizeof(entry->data));
+#if !defined(NDEBUG)
             entry->dataSets++;
+#endif
             verdict = "pcm data pointer";
         } else if (attribute.attribute_id == ATTRIBUTE_VOLUME && entry->channels != 0 && attribute.value_size == entry->channels * sizeof(float)) {
             std::memcpy(entry->volume, attribute.value, attribute.value_size);
             verdict = "volume";
         }
+#if !defined(NDEBUG)
         const auto traces = entry->attributeTraces++;
         if (traces < ATTRIBUTE_TRACE_FULL || traces % ATTRIBUTE_TRACE_EVERY == 0) TraceAttribute(port, *entry, attribute, verdict);
+#endif
     }
     return 0;
 }

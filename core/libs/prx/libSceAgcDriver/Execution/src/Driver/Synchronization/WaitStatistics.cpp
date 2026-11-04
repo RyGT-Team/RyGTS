@@ -26,7 +26,9 @@ EpochBumps& Driver::epochBumps() {
 
 void Driver::bumpEpoch(std::uint64_t EpochBumps::*counter) {
     GuestMemory::BumpCollectEpoch();
+#if !defined(NDEBUG)
     ++(epochBumps().*counter);
+#endif
 }
 
 bool Driver::packetEpoch() {

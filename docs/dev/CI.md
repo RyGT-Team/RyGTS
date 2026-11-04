@@ -55,10 +55,13 @@ Compilation and package validation do not replace live GPU tests.
 
 ## Debug diagnostics
 
-Debug uses optimized `RelWithDebInfo` native code and an optimized launcher,
-with full matching PDBs beside each rebuilt module. It includes a versioned
+The renderer uses CMake `Debug` with `/O2 /Ob2 /Zi` and the redistributable
+`MultiThreadedDLL` runtime. Debug-only instrumentation stays compiled in;
+normal Debug/Trace log levels remain available in both configurations. The
+launcher is optimized, with matching PDBs beside each rebuilt module. Debug
+includes a versioned
 diagnostics-only renderer overlay and optional capture tools. Release uses the
-unmodified pinned renderer. The overlay refuses another renderer pin until it
+pinned renderer with production fixes. The overlay refuses another renderer pin until it
 has been rebased and validated. Package metadata identifies both the pin and
 overlay hashes. Other runtime helpers retain the same pinned base provenance;
 this does not provide symbols for those helpers.

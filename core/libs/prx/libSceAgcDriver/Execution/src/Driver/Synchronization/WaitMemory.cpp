@@ -10,6 +10,12 @@
 #endif
 #include <immintrin.h>
 
+#if !defined(NDEBUG)
+#define AGC_DIAGNOSTIC(...) __VA_ARGS__
+#else
+#define AGC_DIAGNOSTIC(...) ((void)0)
+#endif
+
 namespace AgcDriver::DriverDetail {
 
 void PollSleep() {
@@ -43,7 +49,11 @@ bool Driver::pollTryEach() {
 }
 
 bool Driver::traceLateLabels() {
+#if !defined(NDEBUG)
     static const bool trace = std::getenv("APS5_TRACE_LATE_LABELS") != nullptr;
+#else
+    static constexpr bool trace = false;
+#endif
     return trace;
 }
 
@@ -56,7 +66,11 @@ void Driver::waitMemory(std::span<const std::uint32_t> packet, std::uint32_t que
     auto& outcomes = waitOutcomes();
     const std::uint64_t awaited = packet[2] | (static_cast<std::uint64_t>(packet[3]) << 32u);
     const std::size_t awaitedBytes = Pm4::WaitAwaitedBytes(packet);
+#if !defined(NDEBUG)
     static const bool traceGpu = std::getenv("APS5_TRACE_GPU") != nullptr;
+#else
+    static constexpr bool traceGpu = false;
+#endif
     if (traceGpu) std::fprintf(stderr, "[gpu] %.1f queue 0x%x waits 0x%llx == 0x%x (now 0x%x)\n", TraceMs(), queue, static_cast<unsigned long long>(packet[2] | (static_cast<std::uint64_t>(packet[3]) << 32u)), packet[4],
                                *reinterpret_cast<const volatile std::uint32_t*>(packet[2] | (static_cast<std::uint64_t>(packet[3]) << 32u)));
     struct WaitTrace {
@@ -77,7 +91,7 @@ void Driver::waitMemory(std::span<const std::uint32_t> packet, std::uint32_t que
     } epochPoint;
     GuestMemory::CheckRange(reinterpret_cast<const void*>(awaited), awaitedBytes, awaitedBytes);
     if (Pm4::WaitSatisfiedUnchecked(packet)) {
-        ++outcomes.atEntry;
+        AGC_DIAGNOSTIC(++outcomes.atEntry);
         return;
     }
     if (heldAtSubmit || storedSince(packet, awaited, awaitedBytes, received)) return;
@@ -106,18 +120,18 @@ void Driver::waitMemory(std::span<const std::uint32_t> packet, std::uint32_t que
         if (hit->late) {
             if (hit->generation == refusedGeneration) return false;
             if (!GuestMemory::UnchangedSinceCollected(awaited, awaitedBytes, hit->generation)) {
-                ++outcomes.lateRefusedCpuStore;
+                AGC_DIAGNOSTIC(++outcomes.lateRefusedCpuStore);
                 refusedGeneration = hit->generation;
                 if (trace) traceLate("refused, CPU store since the group closed", hit, refusal);
                 return false;
             }
-            ++outcomes.fromRecorderLate;
+            AGC_DIAGNOSTIC(++outcomes.fromRecorderLate);
             if (trace) traceLate("trusted", hit, refusal);
         }
-        ++(polling ? outcomes.fromRecorderPolling : outcomes.fromRecorder);
-        if (unlockedHit) ++outcomes.fromRecorderUnlocked;
+        AGC_DIAGNOSTIC(++(polling ? outcomes.fromRecorderPolling : outcomes.fromRecorder));
+        if (unlockedHit) AGC_DIAGNOSTIC(++outcomes.fromRecorderUnlocked);
         if (hit->queue == queue) {
-            ++outcomes.fromRecorderSameQueue;
+            AGC_DIAGNOSTIC(++outcomes.fromRecorderSameQueue);
             if (!hit->late) epochPoint.bump = false;
         }
         return true;
@@ -133,7 +147,7 @@ void Driver::waitMemory(std::span<const std::uint32_t> packet, std::uint32_t que
         }
     }
     const bool lockedEntry = !unlocked || Graphics::Recorder::SnapshotWriteOverlaps(awaited, awaitedBytes);
-    if (!lockedEntry) ++outcomes.entriesUnlocked;
+    if (!lockedEntry) AGC_DIAGNOSTIC(++outcomes.entriesUnlocked);
 
     static const bool blockingEntry = std::getenv("APS5_WAIT_LOCK_ENTRY") != nullptr;
     bool recheck = !lockedEntry;
@@ -144,7 +158,7 @@ void Driver::waitMemory(std::span<const std::uint32_t> packet, std::uint32_t que
         if (blockingEntry || !unlocked) {
             gpuLock.lock();
         } else if (!gpuLock.try_lock()) {
-            ++outcomes.entryTriesFailed;
+            AGC_DIAGNOSTIC(++outcomes.entryTriesFailed);
             recheck = true;
             entryTryFailed = true;
         }
@@ -159,7 +173,11 @@ void Driver::waitMemory(std::span<const std::uint32_t> packet, std::uint32_t que
         }
     }
 
+#if !defined(NDEBUG)
     static const bool pollProfile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool pollProfile = false;
+#endif
     auto& poll = pollStats();
     const auto pollRefused = [&](Graphics::Recorder::LabelRefusal refusal) {
         if (pollProfile && refusal != Graphics::Recorder::LabelRefusal::None && static_cast<std::size_t>(refusal) < poll.refusals.size()) ++poll.refusals[static_cast<std::size_t>(refusal)];
@@ -236,13 +254,13 @@ void Driver::waitMemory(std::span<const std::uint32_t> packet, std::uint32_t que
             submitted = true;
         }
         if (submitted) {
-            ++outcomes.pollSubmits;
+            AGC_DIAGNOSTIC(++outcomes.pollSubmits);
             if (pollProfile) ++poll.submits;
         }
         if (reap) {
             const auto withWorkBefore = pollProfile ? Graphics::Recorder::ReapsWithWork() : 0;
             localDevice->ReapRecorded();
-            ++outcomes.pollReaps;
+            AGC_DIAGNOSTIC(++outcomes.pollReaps);
             if (pollProfile) {
                 ++poll.reaps;
                 ++(behindCompletion ? poll.reapsBehindCompletion : poll.reapsOther);
@@ -280,7 +298,7 @@ void Driver::waitMemory(std::span<const std::uint32_t> packet, std::uint32_t que
 
         if (!warned && std::chrono::steady_clock::now() - start > std::chrono::milliseconds(waitTimeoutMs())) {
             warned = true;
-            ++outcomes.timedOut;
+            AGC_DIAGNOSTIC(++outcomes.timedOut);
             static std::set<std::uint64_t> reported;
             static std::uint64_t timeouts = 0;
             if (++timeouts % 20 == 0) std::fprintf(stderr, "[gpu] %llu GPU waits have timed out\n", static_cast<unsigned long long>(timeouts));
@@ -311,7 +329,9 @@ void Driver::waitMemory(std::span<const std::uint32_t> packet, std::uint32_t que
         }
         if (warned) return;
     }
-    ++outcomes.polled;
+    AGC_DIAGNOSTIC(++outcomes.polled);
 }
 
 }
+
+#undef AGC_DIAGNOSTIC

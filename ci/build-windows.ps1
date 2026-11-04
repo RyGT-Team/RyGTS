@@ -25,7 +25,7 @@ if ($Target -eq 'Launcher') {
     Invoke-Checked 'python' @('ci/prepare-renderer.py', $source)
     Invoke-Checked 'python' @('ci/runtime/apply.py', $source)
     if ($Flavor -eq 'Diagnostics') { Invoke-Checked 'python' @('ci/diagnostics/apply.py', $source) }
-    $configuration = if ($Flavor -eq 'Diagnostics') { 'RelWithDebInfo' } else { 'Release' }
+    $configuration = if ($Flavor -eq 'Diagnostics') { 'Debug' } else { 'Release' }
     if (!$env:VCINSTALLDIR) {
         $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
         $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
@@ -36,7 +36,8 @@ if ($Target -eq 'Launcher') {
         $env:PATH = "$llvm/bin;$env:PATH"
         $env:LIB = "$($builtins.DirectoryName);$env:LIB"
     }
-    Invoke-Checked 'cmake' @('-S',$source,'-B',"$source/Build/ci",'-G','Ninja',"-DCMAKE_BUILD_TYPE=$configuration",'-DCMAKE_C_COMPILER=clang-cl','-DCMAKE_CXX_COMPILER=clang-cl','-DCMAKE_LINKER=lld-link','-DHAVE_ENDIAN_H=OFF','-DSHADGT_RYTY_GPU=ON','-DENABLE_DISCORD_RPC=ON')
+    # Keep Debug diagnostics and symbols with optimization and the redistributable CRT.
+    Invoke-Checked 'cmake' @('-S',$source,'-B',"$source/Build/ci",'-G','Ninja',"-DCMAKE_BUILD_TYPE=$configuration",'-DCMAKE_C_COMPILER=clang-cl','-DCMAKE_CXX_COMPILER=clang-cl','-DCMAKE_LINKER=lld-link','-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL','-DCMAKE_C_FLAGS_DEBUG=/O2 /Ob2 /Zi','-DCMAKE_CXX_FLAGS_DEBUG=/O2 /Ob2 /Zi','-DHAVE_ENDIAN_H=OFF','-DSHADGT_RYTY_GPU=ON','-DENABLE_DISCORD_RPC=ON')
     if (!(Select-String -LiteralPath "$source/Build/ci/CMakeCache.txt" -Pattern '^ENABLE_DISCORD_RPC:BOOL=ON$' -Quiet)) { throw 'Discord RPC was not enabled in renderer configuration' }
     Invoke-Checked 'cmake' @('--build',"$source/Build/ci",'--target','ryty_gpu','--parallel','2')
     $binary = Get-ChildItem "$source/Build/ci" -Recurse -Filter libSceVideoOut.prx

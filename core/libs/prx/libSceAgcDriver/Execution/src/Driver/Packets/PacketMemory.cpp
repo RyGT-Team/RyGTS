@@ -11,7 +11,11 @@ namespace AgcDriver::DriverDetail {
 
 bool Driver::preparePacketMemory(const Submission& submission, QueueState& queue, std::span<const std::uint32_t> packet, std::uint32_t header, std::uint32_t opcode, bool& wroteOnGpu, bool& endOfPipeInterrupt, bool& drawPacket, bool& sampleDump) {
     static const bool drainAll = std::getenv("APS5_DRAIN_ALL") != nullptr;
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     wroteOnGpu = false;
 
     bool orderedAlready = false;

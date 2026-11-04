@@ -38,7 +38,11 @@ void Driver::Present(const PresentationWindow& window, const DisplayBuffer* buff
 
     static const bool syncFlip = std::getenv("APS5_SYNC_FLIP") != nullptr;
     static const std::size_t inFlight = VulkanDevice::FlipInFlight();
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     std::shared_ptr<VulkanDevice> presenting;
     timing.Mark("validate");
     try {
@@ -130,7 +134,11 @@ void Driver::reportPresents(double waitedMs, std::size_t inFlight) {
     static std::vector<double> waits;
     static VulkanDevice::PresentStatistics previous{};
     static std::uint64_t previousFlips = 0, windowSerial = 0, previousUnsignaled = 0;
+#if !defined(NDEBUG)
     static auto lastReport = std::chrono::steady_clock::now();
+#else
+    static std::chrono::steady_clock::time_point lastReport{};
+#endif
     waits.push_back(waitedMs);
     if (waits.size() == 1) windowSerial = flipSerial.load();
     const auto now = std::chrono::steady_clock::now();

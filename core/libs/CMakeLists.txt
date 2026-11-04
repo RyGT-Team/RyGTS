@@ -141,7 +141,7 @@ list(APPEND PATCHED_OUTPUTS ${LIBCOHTML_PROSPERO_PATCHED})
 
 add_custom_target(libs DEPENDS ${PATCHED_OUTPUTS})
 
-if(BUILD_TESTING)
+if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/HostThreadLocalLibrary.cpp")
     add_library(host_thread_local_test_library SHARED tests/HostThreadLocalLibrary.cpp)
     set_target_properties(host_thread_local_test_library PROPERTIES RUNTIME_OUTPUT_DIRECTORY "$<1:${RTY_TEST_OUTPUT_DIRECTORY}>")
     target_include_directories(host_thread_local_test_library PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

@@ -71,8 +71,13 @@ inline std::uint64_t MaskFromEnvironment(const char* name) {
 }
 
 inline bool Trace() {
+#if !defined(NDEBUG)
+
     static const bool trace = std::getenv("APS5_TRACE_AFFINITY") != nullptr;
     return trace;
+#else
+    return false;
+#endif
 }
 
 inline unsigned long ThreadId(void* handle) {

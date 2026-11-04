@@ -25,8 +25,12 @@ constexpr std::uint32_t samplerDword3ReservedMask = 0x3ffff000u;
 
 // Debug aid: APS5_TRACE_BDA=1 names the accesses that make a program address-based (see Collect).
 bool bdaTraceEnabled() {
+#if !defined(NDEBUG)
     static const bool enabled = std::getenv("APS5_TRACE_BDA") != nullptr;
     return enabled;
+#else
+    return false;
+#endif
 }
 constexpr unsigned bdaTraceLimit = 8;
 
@@ -112,7 +116,9 @@ public:
                 Collect(*inst);
             }
         }
+#if !defined(NDEBUG)
         if (m_bdaTraces > bdaTraceLimit) std::fprintf(stderr, "[bda] %u more address accesses in this program not shown\n", m_bdaTraces - bdaTraceLimit);
+#endif
         LinkImageAliases();
         for (const auto& patch : m_handlePatches) {
             patch.handle->SetFlags<std::uint32_t>(patch.resource);
@@ -742,12 +748,14 @@ private:
             // reason a stage takes the BDA path can be read off without a shader dump.
             // The first few accesses of a program are printed (a Bink kernel has hundreds); Run
             // reports how many more there were.
+#if !defined(NDEBUG)
             if (bdaTraceEnabled() && ++m_bdaTraces <= bdaTraceLimit) {
                 const auto* kind = memory.kind == ResourceKind::ScalarAddress ? "scalar address" : memory.kind == ResourceKind::Global ? "global" : "flat";
                 const IrValue* offset = inst.ArgumentCount() > 1 ? inst.Argument(1)->Resolve() : nullptr;
                 const bool immediateOffset = offset != nullptr && offset->HasImmediate();
                 std::fprintf(stderr, "[bda] %s at pc 0x%08x: %s access, offset %s%s\n", std::string(IrOpcodeName(op)).c_str(), flags.pc, kind, immediateOffset ? "immediate" : "dynamic", memory.kind == ResourceKind::ScalarAddress && !immediateOffset ? " (a register offset is not planned by the SRT walker)" : "");
             }
+#endif
             m_info.usesDma = true;
             return;
         }

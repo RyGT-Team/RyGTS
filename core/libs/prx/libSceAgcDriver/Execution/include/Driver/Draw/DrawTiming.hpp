@@ -15,7 +15,11 @@ inline constexpr const char* DrawDriverPhaseNames[DrawDriverPhaseCount] = {"prol
 struct DrawPhaseTotals {
     std::array<double, DrawDriverPhaseCount> ms{};
     std::uint64_t packets = 0, drawn = 0, captures = 0;
+#if !defined(NDEBUG)
     std::chrono::steady_clock::time_point lastReport = std::chrono::steady_clock::now();
+#else
+    std::chrono::steady_clock::time_point lastReport{};
+#endif
 };
 
 struct PendingDrawPhases {

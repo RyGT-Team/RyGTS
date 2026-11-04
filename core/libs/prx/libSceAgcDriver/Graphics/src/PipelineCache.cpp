@@ -24,7 +24,11 @@ struct FileHeader {
 static_assert(sizeof(FileHeader) == 24);
 
 bool profiling() {
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     return profile;
 }
 

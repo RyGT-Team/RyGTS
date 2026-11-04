@@ -32,6 +32,55 @@ if(BUILD_TESTING)
     enable_testing()
 endif()
 
+# Exercise the actual headers with explicit Release and Debug preprocessing in every build.
+if(BUILD_TESTING)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    set(disk_store_methods "${CMAKE_CURRENT_BINARY_DIR}/disk_store_wait_methods.inc")
+    add_custom_command(OUTPUT "${disk_store_methods}"
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/core/shader/recompiler/tests/extract_disk_store_wait.py"
+            --source "${CMAKE_CURRENT_SOURCE_DIR}/core/shader/recompiler/ShaderDiskCache.cpp"
+            --output "${disk_store_methods}"
+        DEPENDS core/shader/recompiler/tests/extract_disk_store_wait.py
+            core/shader/recompiler/ShaderDiskCache.cpp VERBATIM)
+    add_custom_target(runtime_disk_store_wait_methods DEPENDS "${disk_store_methods}")
+    foreach(mode IN ITEMS release debug)
+        set(target runtime_diagnostic_headers_${mode})
+        add_test_executable(${target} core/libs/tests/DiagnosticHeaders.cpp)
+        target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/core/libs")
+        target_compile_features(${target} PRIVATE cxx_std_20)
+        if(mode STREQUAL "release")
+            target_compile_definitions(${target} PRIVATE NDEBUG)
+        elseif(MSVC)
+            target_compile_options(${target} PRIVATE /UNDEBUG)
+        else()
+            target_compile_options(${target} PRIVATE -UNDEBUG)
+        endif()
+        set(writer_target runtime_disk_store_wait_${mode})
+        add_test_executable(${writer_target}
+            core/shader/recompiler/tests/disk_store_wait_test.cpp "${disk_store_methods}")
+        add_dependencies(${writer_target} runtime_disk_store_wait_methods)
+        target_include_directories(${writer_target} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+        target_compile_features(${writer_target} PRIVATE cxx_std_20)
+        if(mode STREQUAL "release")
+            target_compile_definitions(${writer_target} PRIVATE NDEBUG)
+        elseif(MSVC)
+            target_compile_options(${writer_target} PRIVATE /UNDEBUG)
+        else()
+            target_compile_options(${writer_target} PRIVATE -UNDEBUG)
+        endif()
+        add_test(NAME runtime_disk_store_wait_${mode} COMMAND ${writer_target})
+        set_tests_properties(runtime_disk_store_wait_${mode} PROPERTIES TIMEOUT 20)
+        foreach(level IN ITEMS Trace Debug Warning)
+            set(test_dir "${CMAKE_CURRENT_BINARY_DIR}/diag-headers-${mode}-${level}")
+            file(MAKE_DIRECTORY "${test_dir}")
+            add_test(NAME runtime_diag_headers_${mode}_${level} COMMAND ${target} ${level})
+            set_tests_properties(runtime_diag_headers_${mode}_${level} PROPERTIES
+                WORKING_DIRECTORY "${test_dir}" TIMEOUT 10)
+        endforeach()
+    endforeach()
+endif()
+
 option(RTY_ENABLE_SPIRV_TOOLS "Enable SPIRV-Tools validation and optimization" OFF)
 option(RTY_ENABLE_TIMING_LOG "Enable frame timing logging" OFF)
 option(RTY_BUILD_GUI "Build the Qt6 GUI when Qt6 is available" ON)
@@ -39,7 +88,7 @@ option(RTY_PS4_MEMORY "Report the base PS4 memory sizes to titles instead of the
 if(RTY_PS4_MEMORY)
     add_compile_definitions(RTY_PS4_MEMORY)
 endif()
-add_compile_definitions(RTY_ENABLE_TIMING_LOG=$<BOOL:${RTY_ENABLE_TIMING_LOG}>)
+add_compile_definitions(RTY_ENABLE_TIMING_LOG=$<AND:$<CONFIG:Debug>,$<BOOL:${RTY_ENABLE_TIMING_LOG}>>)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

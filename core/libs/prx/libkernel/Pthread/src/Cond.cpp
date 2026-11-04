@@ -51,11 +51,13 @@ int waitUntil(PthreadCond* cond, PthreadMutex* mutex, std::optional<std::uint64_
     auto* c = resolveCond(cond);
     auto* m = lockedMutex(mutex);
     bool timedOut = false;
+#if !defined(NDEBUG)
     const auto waitStart = std::chrono::steady_clock::now();
     struct Trace {
         const void* caller; const bool& timedOut; std::chrono::steady_clock::time_point start;
         ~Trace() { KernelTraceWait_nid_postfix("cond", caller, static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count()), timedOut); }
     } trace{caller, timedOut, waitStart};
+#endif
     if (m->_type == MutexType::Recursive) {
         std::unique_lock<std::recursive_timed_mutex> lock(m->_rmtx, std::adopt_lock);
         const auto previousCount = m->_count;

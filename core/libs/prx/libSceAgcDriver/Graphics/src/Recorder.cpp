@@ -23,6 +23,12 @@
 #include <thread>
 #include <tuple>
 
+#if !defined(NDEBUG)
+#define AGC_DIAGNOSTIC(...) __VA_ARGS__
+#else
+#define AGC_DIAGNOSTIC(...) ((void)0)
+#endif
+
 namespace AgcDriver::Graphics {
 
 namespace {
@@ -30,7 +36,11 @@ namespace {
 Recorder* activeRecorder = nullptr;
 
 bool DrawProfiled() {
+#if !defined(NDEBUG)
     static const bool profiled = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profiled = false;
+#endif
     return profiled;
 }
 
@@ -60,7 +70,11 @@ thread_local std::size_t activeSyncSite = NoSyncSite;
 
 bool SyncSitesProfiled() {
     // APS5_NO_SYNC_SITES=1 leaves only the per-source and per-thread counts.
+#if !defined(NDEBUG)
     static const bool profiled = std::getenv("APS5_PROFILE_DRAW") != nullptr && std::getenv("APS5_NO_SYNC_SITES") == nullptr;
+#else
+    static constexpr bool profiled = false;
+#endif
     return profiled;
 }
 
@@ -427,15 +441,17 @@ void ReleaseDeferredKeeps() {
             handedOff = true;
             if (profile) {
                 const auto queued = static_cast<std::uint64_t>(queue.items.size());
+#if !defined(NDEBUG)
                 auto seen = releaseQueueMax.load(std::memory_order_relaxed);
                 while (queued > seen && !releaseQueueMax.compare_exchange_weak(seen, queued, std::memory_order_relaxed)) {
                 }
+#endif
             }
         }
     } catch (...) {
     }
     if (!handedOff) {
-        if (profile && overBound) inlineOverBound.fetch_add(releasing.size(), std::memory_order_relaxed);
+        if (profile && overBound) AGC_DIAGNOSTIC(inlineOverBound.fetch_add(releasing.size(), std::memory_order_relaxed));
         DestroyDeferred(std::move(releasing), false);
         return;
     }
@@ -676,7 +692,11 @@ struct HookSyncStats {
     double waitedMs = 0;
     std::array<std::uint64_t, SizeBuckets> rangeBuckets{};
     std::array<std::uint64_t, SizeBuckets> accessBuckets{};
+#if !defined(NDEBUG)
     std::chrono::steady_clock::time_point lastReport = std::chrono::steady_clock::now();
+#else
+    std::chrono::steady_clock::time_point lastReport{};
+#endif
 };
 
 HookSyncStats& HookSyncs() {
@@ -685,7 +705,11 @@ HookSyncStats& HookSyncs() {
 }
 
 bool HookSyncProfiled() {
+#if !defined(NDEBUG)
     static const bool profiled = std::getenv("APS5_PROFILE_DRAW") != nullptr && std::getenv("APS5_NO_HOOKSYNC_PROFILE") == nullptr;
+#else
+    static constexpr bool profiled = false;
+#endif
     return profiled;
 }
 
@@ -830,7 +854,11 @@ struct RecordedStoreStats {
     std::mutex mutex;
     std::map<HookSyncKey, RecordedStoreTotals> byKey;
     RecordedStoreTotals totals;
+#if !defined(NDEBUG)
     std::chrono::steady_clock::time_point lastReport = std::chrono::steady_clock::now();
+#else
+    std::chrono::steady_clock::time_point lastReport{};
+#endif
 };
 
 RecordedStoreStats& RecordedStoreSyncs() {
@@ -941,7 +969,7 @@ private:
 // work first; then storage image results pending for the range are stored. The recorder is only
 // dereferenced under the GpuMutex (it is destroyed with its device under that lock).
 void FlushForAccess(std::uint64_t address, std::size_t bytes) {
-    hookCalls.fetch_add(1, std::memory_order_relaxed);
+    AGC_DIAGNOSTIC(hookCalls.fetch_add(1, std::memory_order_relaxed));
     // A label this worker queued but has not recorded writes the range: in queue order the label
     // precedes this access, so the group is recorded first (it then notes the range as a pending
     // write of the open batch, and the check below syncs on it like any recorded store). Not from
@@ -951,14 +979,14 @@ void FlushForAccess(std::uint64_t address, std::size_t bytes) {
     // anyway, so the write-back landing first is the order the hardware gives.
     if (!QueuedLabelRanges().empty() && QueuedLabelOverlaps(address, bytes)) {
         if (completionDepth != 0 && HookCompletionGuard()) {
-            queuedLabelHookInCompletion.fetch_add(1, std::memory_order_relaxed);
+            AGC_DIAGNOSTIC(queuedLabelHookInCompletion.fetch_add(1, std::memory_order_relaxed));
         } else if (auto* record = queuedLabelRecorder.load(std::memory_order_acquire); record != nullptr) {
-            queuedLabelHookRecords.fetch_add(1, std::memory_order_relaxed);
+            AGC_DIAGNOSTIC(queuedLabelHookRecords.fetch_add(1, std::memory_order_relaxed));
             record();
         }
     }
     if (!HookSnapshotEnabled() || SnapshotOverlaps(address, bytes)) {
-        hookLocks.fetch_add(1, std::memory_order_relaxed);
+        AGC_DIAGNOSTIC(hookLocks.fetch_add(1, std::memory_order_relaxed));
         GuestMemory::TagGpuLockSite(GuestMemory::GpuLockSite::Hook);
         std::lock_guard gpu(GuestMemory::GpuMutex());
         if (auto* recorder = Recorder::Active(); recorder != nullptr && recorder->PendingWriteOverlaps(address, bytes)) {
@@ -1190,7 +1218,7 @@ void Recorder::NoteQueuedLabel(std::uint64_t address, std::span<const std::byte>
     // The range before the table: the hook covers the group whether or not a table exists to
     // enter it in (no owner: the callback records it outright, by a CPU store when need be).
     QueuedLabelRanges().emplace_back(address, address + bytes.size());
-    queuedLabelsNoted.fetch_add(1, std::memory_order_relaxed);
+    AGC_DIAGNOSTIC(queuedLabelsNoted.fetch_add(1, std::memory_order_relaxed));
     std::lock_guard tableLock(labelTableMutex);
     if (labelTableOwner == nullptr) return;
     auto& recorded = labelTableOwner->labels;
@@ -1198,7 +1226,7 @@ void Recorder::NoteQueuedLabel(std::uint64_t address, std::span<const std::byte>
     for (std::size_t offset = 0; offset + 4 <= bytes.size(); offset += 4) {
         std::uint32_t value = 0;
         std::memcpy(&value, bytes.data() + offset, 4);
-        if (const auto found = recorded.find(address + offset); found != recorded.end() && found->second.batch != nullptr) queuedLabelsOverRecorded.fetch_add(1, std::memory_order_relaxed);
+        if (const auto found = recorded.find(address + offset); found != recorded.end() && found->second.batch != nullptr) AGC_DIAGNOSTIC(queuedLabelsOverRecorded.fetch_add(1, std::memory_order_relaxed));
         table.insert_or_assign(address + offset, LabelEntry{value, queue, stamp, nullptr});
     }
     labelTableOwner->recordedLabels.store(recorded.size(), std::memory_order_relaxed);
@@ -1249,7 +1277,7 @@ bool Recorder::SnapshotOverlaps(const WriteRanges* snapshot, std::uint64_t addre
 
 void Recorder::CountSync(int source, const void* site) {
     if (source < 0 || source >= 5) return;
-    ++syncCounts[source];
+    AGC_DIAGNOSTIC(++syncCounts[source]);
     announcedSource = source;
     announcedSite = site;
 }
@@ -1317,13 +1345,13 @@ void Recorder::QueueKeyStore(VkBuffer buffer, VkDeviceSize first, VkDeviceSize l
     ensureOpen();
     // A queued label store over the keys lands first (program order: the key store is later).
     FlushStoresOverlapping(begin, static_cast<std::size_t>(end - begin));
-    keyStoreCount.fetch_add(1, std::memory_order_relaxed);
+    AGC_DIAGNOSTIC(keyStoreCount.fetch_add(1, std::memory_order_relaxed));
     if (seed != nullptr) open->kept.push_back(seed);
     // The same range queued twice lands once: nothing wrote over it in between, or the writer
     // would have recorded the first store first.
     for (const auto& store : open->keyStores) {
         if (store.buffer == buffer && store.first == first && store.last == last) {
-            keyStoresJoined.fetch_add(1, std::memory_order_relaxed);
+            AGC_DIAGNOSTIC(keyStoresJoined.fetch_add(1, std::memory_order_relaxed));
             return;
         }
     }
@@ -1376,8 +1404,8 @@ void Recorder::recordKeyStores(bool forWriter) {
     CountBarriers(CommandClass::DccKeyStore, 2);
     EndGpuTiming(timing, bytes);
     open->coveredAccess = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_HOST_READ_BIT;
-    keyStoreRuns.fetch_add(1, std::memory_order_relaxed);
-    if (forWriter) keyStoreRunsForWriter.fetch_add(1, std::memory_order_relaxed);
+    AGC_DIAGNOSTIC(keyStoreRuns.fetch_add(1, std::memory_order_relaxed));
+    if (forWriter) AGC_DIAGNOSTIC(keyStoreRunsForWriter.fetch_add(1, std::memory_order_relaxed));
 }
 
 void Recorder::ensureOpen() {
@@ -1419,22 +1447,22 @@ void Recorder::RecordStore(VkBuffer buffer, VkDeviceSize offset, std::span<const
     ensureOpen();
     auto& run = open->run;
     const VkDeviceSize end = offset + bytes.size();
-    storeCount.fetch_add(1, std::memory_order_relaxed);
+    AGC_DIAGNOSTIC(storeCount.fetch_add(1, std::memory_order_relaxed));
     if (LabelRunsPerBatch()) {
         // Queued for the batch's run: a store inside the last queued one replaces its bytes, a
         // contiguous one joins it (a joined range overlapping an earlier queued store takes the
         // WAW barrier when the run is recorded, so no join is refused).
-        if (run.queued.empty()) storeRuns.fetch_add(1, std::memory_order_relaxed);
+        if (run.queued.empty()) AGC_DIAGNOSTIC(storeRuns.fetch_add(1, std::memory_order_relaxed));
         else if (auto& last = run.queued.back(); last.buffer == buffer) {
             const VkDeviceSize lastEnd = last.offset + last.bytes.size();
             if (offset >= last.offset && end <= lastEnd) {
                 std::memcpy(last.bytes.data() + (offset - last.offset), bytes.data(), bytes.size());
-                storesReplaced.fetch_add(1, std::memory_order_relaxed);
+                AGC_DIAGNOSTIC(storesReplaced.fetch_add(1, std::memory_order_relaxed));
                 return;
             }
             if (offset == lastEnd && last.bytes.size() + bytes.size() <= 65536) {
                 last.bytes.insert(last.bytes.end(), bytes.begin(), bytes.end());
-                storesJoined.fetch_add(1, std::memory_order_relaxed);
+                AGC_DIAGNOSTIC(storesJoined.fetch_add(1, std::memory_order_relaxed));
                 return;
             }
         }
@@ -1456,12 +1484,12 @@ void Recorder::RecordStore(VkBuffer buffer, VkDeviceSize offset, std::span<const
         recordBarrier(open->commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
         CountBarriers(CommandClass::LabelRun);
         run.open = true;
-        storeRuns.fetch_add(1, std::memory_order_relaxed);
+        AGC_DIAGNOSTIC(storeRuns.fetch_add(1, std::memory_order_relaxed));
     } else if (run.buffer == buffer && !run.bytes.empty()) {
         const VkDeviceSize pendingEnd = run.offset + run.bytes.size();
         if (offset >= run.offset && end <= pendingEnd) {
             std::memcpy(run.bytes.data() + (offset - run.offset), bytes.data(), bytes.size());
-            storesReplaced.fetch_add(1, std::memory_order_relaxed);
+            AGC_DIAGNOSTIC(storesReplaced.fetch_add(1, std::memory_order_relaxed));
             return;
         }
         if (offset == pendingEnd && run.bytes.size() + bytes.size() <= 65536) {
@@ -1469,10 +1497,10 @@ void Recorder::RecordStore(VkBuffer buffer, VkDeviceSize offset, std::span<const
             // that overlaps a store the run already recorded takes the WAW barrier below instead.
             if (!JoinWawCheck() || !overlapsRecorded()) {
                 run.bytes.insert(run.bytes.end(), bytes.begin(), bytes.end());
-                storesJoined.fetch_add(1, std::memory_order_relaxed);
+                AGC_DIAGNOSTIC(storesJoined.fetch_add(1, std::memory_order_relaxed));
                 return;
             }
-            storeJoinsRefused.fetch_add(1, std::memory_order_relaxed);
+            AGC_DIAGNOSTIC(storeJoinsRefused.fetch_add(1, std::memory_order_relaxed));
         }
     }
     flushPendingStore();
@@ -1480,7 +1508,7 @@ void Recorder::RecordStore(VkBuffer buffer, VkDeviceSize offset, std::span<const
     if (waw) {
         recordBarrier(open->commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
         CountBarriers(CommandClass::LabelRun);
-        storeWawBarriers.fetch_add(1, std::memory_order_relaxed);
+        AGC_DIAGNOSTIC(storeWawBarriers.fetch_add(1, std::memory_order_relaxed));
     }
     run.buffer = buffer;
     run.offset = offset;
@@ -1536,7 +1564,7 @@ bool Recorder::closeStoreRun(bool atSubmit) {
             if (std::any_of(run.recorded.begin(), run.recorded.end(), [&](const auto& earlier) { return std::get<0>(earlier) == store.buffer && store.offset < std::get<2>(earlier) && std::get<1>(earlier) < end; })) {
                 recordBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
                 ++barriers;
-                storeWawBarriers.fetch_add(1, std::memory_order_relaxed);
+                AGC_DIAGNOSTIC(storeWawBarriers.fetch_add(1, std::memory_order_relaxed));
             }
             update(commands, store.buffer, store.offset, store.bytes.size(), store.bytes.data());
             run.recorded.emplace_back(store.buffer, store.offset, end);
@@ -1545,11 +1573,11 @@ bool Recorder::closeStoreRun(bool atSubmit) {
         if (atSubmit) {
             recordBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT);
             open->coveredAccess = 0;
-            storeRunsAtSubmit.fetch_add(1, std::memory_order_relaxed);
+            AGC_DIAGNOSTIC(storeRunsAtSubmit.fetch_add(1, std::memory_order_relaxed));
         } else {
             recordBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT | VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT);
             open->coveredAccess = VK_ACCESS_HOST_READ_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
-            storeRunsForced.fetch_add(1, std::memory_order_relaxed);
+            AGC_DIAGNOSTIC(storeRunsForced.fetch_add(1, std::memory_order_relaxed));
         }
         CountBarriers(CommandClass::LabelRun, barriers);
         EndGpuTiming(run.timing, storedBytes);
@@ -1603,7 +1631,11 @@ constexpr const char* HazardNames[HazardKinds] = {"raw", "waw", "war", "image", 
 std::atomic<std::uint64_t> validateEmitted[CommandClasses]{}, validateSkipped[CommandClasses]{}, validateKinds[HazardKinds]{};
 std::atomic<std::uint64_t> validateBatchEnds{0};
 std::atomic<std::int64_t> traceBarriersLeft{[] {
+#if !defined(NDEBUG)
     const char* text = std::getenv("APS5_TRACE_BARRIERS");
+#else
+    constexpr const char* text = nullptr;
+#endif
     return text != nullptr ? static_cast<std::int64_t>(std::strtoll(text, nullptr, 10)) : std::int64_t{0};
 }()};
 std::atomic<std::uint64_t> timingPresents{0};
@@ -1616,13 +1648,21 @@ double timingProgramMs = 0, timingClassMs = 0, timingUnionMs = 0, timingBatchMs 
 std::uint64_t timingBatches = 0;
 
 bool DrawOrGpuProfiled() {
+#if !defined(NDEBUG)
     static const bool profiled = std::getenv("APS5_PROFILE_DRAW") != nullptr || Recorder::GpuTimingEnabled();
+#else
+    static constexpr bool profiled = false;
+#endif
     return profiled;
 }
 
 void reportBarriers() {
     if (!DrawOrGpuProfiled()) return;
+#if !defined(NDEBUG)
     static auto lastReport = std::chrono::steady_clock::now();
+#else
+    static std::chrono::steady_clock::time_point lastReport{};
+#endif
     const auto now = std::chrono::steady_clock::now();
     if (now - lastReport < std::chrono::seconds(10)) return;
     lastReport = now;
@@ -1666,31 +1706,48 @@ void reportBarriers() {
 
 }
 
+#if !defined(NDEBUG)
 bool Recorder::GpuTimingEnabled() {
+#if !defined(NDEBUG)
     static const bool enabled = std::getenv("APS5_PROFILE_GPU") != nullptr;
+#else
+    static constexpr bool enabled = false;
+#endif
     return enabled;
 }
+#endif
 
+#if !defined(NDEBUG)
 void Recorder::CountBarriers(CommandClass which, std::uint32_t count) {
     if (!DrawOrGpuProfiled()) return;
-    classBarriers[static_cast<std::size_t>(which)].fetch_add(count, std::memory_order_relaxed);
+    AGC_DIAGNOSTIC(classBarriers[static_cast<std::size_t>(which)].fetch_add(count, std::memory_order_relaxed));
 }
+#endif
 
 bool Recorder::MergeBarriers() {
     static const bool merge = std::getenv("APS5_FULL_BARRIERS") == nullptr && std::getenv("APS5_NO_BARRIER_ELISION") == nullptr;
     return merge;
 }
 
+#if !defined(NDEBUG)
 void Recorder::CountMerged(CommandClass which) {
     if (!DrawOrGpuProfiled()) return;
-    classMerged[static_cast<std::size_t>(which)].fetch_add(1, std::memory_order_relaxed);
+    AGC_DIAGNOSTIC(classMerged[static_cast<std::size_t>(which)].fetch_add(1, std::memory_order_relaxed));
 }
+#endif
 
+#if !defined(NDEBUG)
 bool Recorder::BarrierValidate() {
+#if !defined(NDEBUG)
     static const bool validate = std::getenv("APS5_BARRIER_VALIDATE") != nullptr;
+#else
+    static constexpr bool validate = false;
+#endif
     return validate;
 }
+#endif
 
+#if !defined(NDEBUG)
 void Recorder::NoteAccess(CommandClass which, const Access& access) {
     if (!BarrierValidate()) return;
     ensureOpen();
@@ -1715,13 +1772,13 @@ void Recorder::NoteAccess(CommandClass which, const Access& access) {
     }
     const auto index = static_cast<std::size_t>(which);
     if (kind != HazardKinds) {
-        validateEmitted[index].fetch_add(1, std::memory_order_relaxed);
-        validateKinds[kind].fetch_add(1, std::memory_order_relaxed);
+        AGC_DIAGNOSTIC(validateEmitted[index].fetch_add(1, std::memory_order_relaxed));
+        AGC_DIAGNOSTIC(validateKinds[kind].fetch_add(1, std::memory_order_relaxed));
         tracker.reads.clear();
         tracker.writes.clear();
         tracker.images.clear();
     } else {
-        validateSkipped[index].fetch_add(1, std::memory_order_relaxed);
+        AGC_DIAGNOSTIC(validateSkipped[index].fetch_add(1, std::memory_order_relaxed));
         if (traceBarriersLeft.load(std::memory_order_relaxed) > 0 && traceBarriersLeft.fetch_sub(1, std::memory_order_relaxed) > 0) {
             const auto first = [](const auto& ranges) { return ranges.empty() ? std::pair<std::uint64_t, std::uint64_t>{0, 0} : std::pair<std::uint64_t, std::uint64_t>{ranges.front().first, ranges.front().second}; };
             const auto reads = first(access.reads);
@@ -1733,9 +1790,10 @@ void Recorder::NoteAccess(CommandClass which, const Access& access) {
     for (const auto& [begin, end] : access.writes) tracker.writes.push_back({begin, end, access.stages});
     for (const auto& [image, written] : access.images) tracker.images.push_back({image, written, access.stages});
 }
+#endif
 
 void Recorder::CountPresent() {
-    timingPresents.fetch_add(1, std::memory_order_relaxed);
+    AGC_DIAGNOSTIC(timingPresents.fetch_add(1, std::memory_order_relaxed));
     presentSerial.fetch_add(1, std::memory_order_relaxed);
 }
 
@@ -1743,6 +1801,7 @@ std::uint64_t Recorder::Presents() {
     return presentSerial.load(std::memory_order_relaxed);
 }
 
+#if !defined(NDEBUG)
 void Recorder::AddGpuTiming(CommandClass which, double nanoseconds, std::uint64_t bytes) {
     std::lock_guard lock(timingMutex);
     auto& totals = timingByKey[ClassKey(which)];
@@ -1751,12 +1810,15 @@ void Recorder::AddGpuTiming(CommandClass which, double nanoseconds, std::uint64_
     totals.bytes += bytes;
     timingClassMs += nanoseconds / 1e6;
 }
+#endif
 
+#if !defined(NDEBUG)
 std::uint32_t Recorder::BeginGpuTiming(std::uint64_t key) {
     if (!GpuTimingEnabled()) return NoTiming;
     Commands();
     return beginTiming(key);
 }
+#endif
 
 std::uint32_t Recorder::beginTiming(std::uint64_t key) {
     if (!GpuTimingEnabled()) return NoTiming;
@@ -1772,7 +1834,7 @@ std::uint32_t Recorder::beginTiming(std::uint64_t key) {
         context.Function<PFN_vkCmdResetQueryPool>("vkCmdResetQueryPool")(commands, open->queries, 0, info.queryCount);
     }
     if (open->timedKeys.size() >= MaxTimedRanges) {
-        timingDropped.fetch_add(1, std::memory_order_relaxed);
+        AGC_DIAGNOSTIC(timingDropped.fetch_add(1, std::memory_order_relaxed));
         return NoTiming;
     }
     const auto index = static_cast<std::uint32_t>(open->timedKeys.size());
@@ -1784,11 +1846,13 @@ std::uint32_t Recorder::beginTiming(std::uint64_t key) {
     return index;
 }
 
+#if !defined(NDEBUG)
 void Recorder::EndGpuTiming(std::uint32_t index, std::uint64_t bytes) {
     if (index == NoTiming || open == nullptr || open->queries == VK_NULL_HANDLE) return;
     if (index < open->timedBytes.size()) open->timedBytes[index] += bytes;
     context.Function<PFN_vkCmdWriteTimestamp>("vkCmdWriteTimestamp")(open->commands, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, open->queries, index * 2 + 1);
 }
+#endif
 
 void Recorder::CountSamples() {
     GuestMemory::AssertGpuLockHeld("Recorder::CountSamples");
@@ -1823,7 +1887,11 @@ void Recorder::readGpuTiming(Batch& batch) {
     std::vector<std::uint64_t> stamps(batch.timedKeys.size() * 2);
     const auto result = context.Function<PFN_vkGetQueryPoolResults>("vkGetQueryPoolResults")(context.device, batch.queries, 0, static_cast<std::uint32_t>(stamps.size()), stamps.size() * sizeof(std::uint64_t), stamps.data(), sizeof(std::uint64_t), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
     if (result != VK_SUCCESS) return;
+#if !defined(NDEBUG)
     static auto lastReport = std::chrono::steady_clock::now();
+#else
+    static std::chrono::steady_clock::time_point lastReport{};
+#endif
     const auto period = context.limits.timestampPeriod;
     // The union of the timed ranges (class ranges nest program ranges: a copy's transfer inside
     // its class range) against the batch span gives what no range covers.
@@ -1885,7 +1953,11 @@ void Recorder::readGpuTiming(Batch& batch) {
 }
 
 bool Recorder::FlipReadCheck() {
+#if !defined(NDEBUG)
     static const bool enabled = std::getenv("APS5_FLIP_READ_CHECK") != nullptr;
+#else
+    static constexpr bool enabled = false;
+#endif
     return enabled;
 }
 
@@ -1925,7 +1997,7 @@ void Recorder::OnComplete(std::function<void()> action) {
 }
 
 bool Recorder::noteWrite(std::uint64_t address, std::size_t bytes, bool ownLabel) {
-    CaptureTrace::Log("buffer-write batch=%llu address=%llx bytes=%zu label=%d", static_cast<unsigned long long>(submissions + 1), static_cast<unsigned long long>(address), bytes, ownLabel);
+    AGC_DIAGNOSTIC(CaptureTrace::Log("buffer-write batch=%llu address=%llx bytes=%zu label=%d", static_cast<unsigned long long>(submissions + 1), static_cast<unsigned long long>(address), bytes, ownLabel));
     if (bytes == 0) return false;
     ensureOpen();
     const auto end = address + bytes;
@@ -1936,7 +2008,7 @@ bool Recorder::noteWrite(std::uint64_t address, std::size_t bytes, bool ownLabel
     // Consecutive dispatches write the same output buffers: a range the snapshot already contains
     // leaves the published union unchanged, so the O(N log N) rebuild is skipped.
     if (SnapshotCovers(address, end)) {
-        ++snapshotCovered;
+        AGC_DIAGNOSTIC(++snapshotCovered);
         return false;
     }
     return true;
@@ -2003,7 +2075,7 @@ void Recorder::publishPendingWrites() const {
     merged->resize(out);
     pendingWrites.store(std::move(merged), std::memory_order_release);
     publishGeneration.fetch_add(1, std::memory_order_release);
-    ++snapshotRebuilds;
+    AGC_DIAGNOSTIC(++snapshotRebuilds);
     if (DrawProfiled()) snapshotRebuildMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
 }
 
@@ -2047,21 +2119,21 @@ bool Recorder::ReadTracking() {
 }
 
 void Recorder::NotePendingRead(std::uint64_t address, std::size_t bytes, ReadKind kind) {
-    CaptureTrace::Log("buffer-read batch=%llu address=%llx bytes=%zu kind=%d", static_cast<unsigned long long>(submissions + 1), static_cast<unsigned long long>(address), bytes, static_cast<int>(kind));
+    AGC_DIAGNOSTIC(CaptureTrace::Log("buffer-read batch=%llu address=%llx bytes=%zu kind=%d", static_cast<unsigned long long>(submissions + 1), static_cast<unsigned long long>(address), bytes, static_cast<int>(kind)));
     if (bytes == 0 || !ReadTrackingEnabled()) return;
     ensureOpen();
     open->reads.push_back({address, address + bytes, kind});
-    readsNoted.fetch_add(1, std::memory_order_relaxed);
+    AGC_DIAGNOSTIC(readsNoted.fetch_add(1, std::memory_order_relaxed));
 }
 
 void Recorder::NotePendingReads(std::span<const std::pair<std::uint64_t, std::uint64_t>> ranges, ReadKind kind) {
     if (ranges.empty() || !ReadTrackingEnabled()) return;
     ensureOpen();
     for (const auto& [begin, end] : ranges) {
-        CaptureTrace::Log("buffer-read batch=%llu address=%llx bytes=%llu kind=%d", static_cast<unsigned long long>(submissions + 1), static_cast<unsigned long long>(begin), static_cast<unsigned long long>(end - begin), static_cast<int>(kind));
+        AGC_DIAGNOSTIC(CaptureTrace::Log("buffer-read batch=%llu address=%llx bytes=%llu kind=%d", static_cast<unsigned long long>(submissions + 1), static_cast<unsigned long long>(begin), static_cast<unsigned long long>(end - begin), static_cast<int>(kind)));
         if (end > begin) open->reads.push_back({begin, end, kind});
     }
-    readsNoted.fetch_add(ranges.size(), std::memory_order_relaxed);
+    AGC_DIAGNOSTIC(readsNoted.fetch_add(ranges.size(), std::memory_order_relaxed));
 }
 
 const Recorder::Batch::Read* Recorder::readOverlap(const Batch& batch, std::uint64_t address, std::uint64_t end) {
@@ -2073,11 +2145,11 @@ const Recorder::Batch::Read* Recorder::readOverlap(const Batch& batch, std::uint
 
 bool Recorder::PendingReadOverlaps(std::uint64_t address, std::size_t bytes, bool ignoreSignaled) const {
     if (bytes == 0) return false;
-    readQueries.fetch_add(1, std::memory_order_relaxed);
+    AGC_DIAGNOSTIC(readQueries.fetch_add(1, std::memory_order_relaxed));
     const auto end = address + bytes;
     if (open != nullptr) {
         if (const auto* read = readOverlap(*open, address, end)) {
-            readHits[static_cast<std::size_t>(read->kind)].fetch_add(1, std::memory_order_relaxed);
+            AGC_DIAGNOSTIC(readHits[static_cast<std::size_t>(read->kind)].fetch_add(1, std::memory_order_relaxed));
             return true;
         }
     }
@@ -2086,10 +2158,10 @@ bool Recorder::PendingReadOverlaps(std::uint64_t address, std::size_t bytes, boo
         const auto* read = readOverlap(**it, address, end);
         if (read == nullptr) continue;
         if (ignoreSignaled && signaled(**it)) {
-            readStaleIgnored.fetch_add(1, std::memory_order_relaxed);
+            AGC_DIAGNOSTIC(readStaleIgnored.fetch_add(1, std::memory_order_relaxed));
             continue;
         }
-        readHits[static_cast<std::size_t>(read->kind)].fetch_add(1, std::memory_order_relaxed);
+        AGC_DIAGNOSTIC(readHits[static_cast<std::size_t>(read->kind)].fetch_add(1, std::memory_order_relaxed));
         return true;
     }
     return false;
@@ -2254,7 +2326,7 @@ std::optional<Recorder::LabelHit> Recorder::lookupLabel(std::uint64_t address, s
         }
     }
     if (!hit.late) hit.generation = 0;
-    if (queued) queuedLabelHits.fetch_add(1, std::memory_order_relaxed);
+    if (queued) AGC_DIAGNOSTIC(queuedLabelHits.fetch_add(1, std::memory_order_relaxed));
     return hit;
 }
 
@@ -2279,10 +2351,10 @@ void Recorder::AfterCompletions(std::uint64_t address, std::span<const std::byte
     }();
     batch.completions.push_back([this, address, copy = std::move(copy), sequence, storedOnGpu] {
         if (storedOnGpu && !always && !writtenBackSince(sequence, address, address + copy.size())) {
-            completionStoresSkipped.fetch_add(1, std::memory_order_relaxed);
+            AGC_DIAGNOSTIC(completionStoresSkipped.fetch_add(1, std::memory_order_relaxed));
             return;
         }
-        completionStoresRun.fetch_add(1, std::memory_order_relaxed);
+        AGC_DIAGNOSTIC(completionStoresRun.fetch_add(1, std::memory_order_relaxed));
         GuestMemory::CheckRange(reinterpret_cast<const void*>(address), copy.size(), 4, true);
         std::memcpy(reinterpret_cast<void*>(address), copy.data(), copy.size());
         GuestMemory::MarkWritten(address, copy.size());
@@ -2318,7 +2390,7 @@ void Recorder::NoteWrittenBack(std::uint64_t address, std::size_t bytes) {
         recorder->writtenBack.push_back({++recorder->writtenBackSequence, address, end});
         while (recorder->writtenBack.size() > 16384) recorder->writtenBack.pop_front();
     }
-    if (recorder->recordedLabels.load(std::memory_order_relaxed) != 0 && recorder->PendingLabelIn(address, bytes)) writeBacksOverLabels.fetch_add(1, std::memory_order_relaxed);
+    if (recorder->recordedLabels.load(std::memory_order_relaxed) != 0 && recorder->PendingLabelIn(address, bytes)) AGC_DIAGNOSTIC(writeBacksOverLabels.fetch_add(1, std::memory_order_relaxed));
     // The GPU-stored completion labels this write-back overlaps now need their completion store,
     // so they enter the pending count (once each; finish() subtracts the batch's count). Batches
     // in `finishing` run their own completions in the same finish(), so only open and in-flight
@@ -2329,7 +2401,7 @@ void Recorder::NoteWrittenBack(std::uint64_t address, std::size_t bytes) {
             label.counted = true;
             ++batch.completionLabelCount;
             completionLabels.fetch_add(1, std::memory_order_acq_rel);
-            completionLabelsCountedLate.fetch_add(1, std::memory_order_relaxed);
+            AGC_DIAGNOSTIC(completionLabelsCountedLate.fetch_add(1, std::memory_order_relaxed));
             recorder->markBehindCompletion(batch, label.begin, label.end);
         }
     };
@@ -2359,7 +2431,7 @@ void Recorder::Submit() {
     if (open->renderPass.open) endOpenRenderPass();
     if (open->samples != VK_NULL_HANDLE) context.Function<PFN_vkCmdEndQuery>("vkCmdEndQuery")(open->commands, open->samples, 0);
     const bool hostReadCovered = (open->run.open || !open->run.queued.empty()) && closeStoreRun(true);
-    if (BarrierValidate()) validateBatchEnds.fetch_add(1, std::memory_order_relaxed);
+    if (BarrierValidate()) AGC_DIAGNOSTIC(validateBatchEnds.fetch_add(1, std::memory_order_relaxed));
     if (open->hostReadOwed && !hostReadCovered) {
         // A fence makes nothing visible to the host: a lean draw's writes (no download barrier of
         // its own) get the batch's one here.
@@ -2380,7 +2452,7 @@ void Recorder::Submit() {
     submission.pCommandBuffers = &batch->commands;
     // The timeline reaches this batch's serial when it completes (see WaitSerial).
     const std::uint64_t serial = submissions + 1;
-    CaptureTrace::Log("submit batch=%llu reads=%zu writes=%zu", static_cast<unsigned long long>(serial), batch->reads.size(), batch->writes.size());
+    AGC_DIAGNOSTIC(CaptureTrace::Log("submit batch=%llu reads=%zu writes=%zu", static_cast<unsigned long long>(serial), batch->reads.size(), batch->writes.size()));
     VkTimelineSemaphoreSubmitInfoKHR timelineInfo{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO_KHR};
     timelineInfo.signalSemaphoreValueCount = 1;
     timelineInfo.pSignalSemaphoreValues = &serial;
@@ -2389,14 +2461,18 @@ void Recorder::Submit() {
         submission.signalSemaphoreCount = 1;
         submission.pSignalSemaphores = &timeline;
     }
+#if !defined(NDEBUG)
     const auto submitStart = std::chrono::steady_clock::now();
+#else
+    constexpr std::chrono::steady_clock::time_point submitStart{};
+#endif
     Check(function(queueSubmit, "vkQueueSubmit")(context.queue, 1, &submission, batch->fence), "vkQueueSubmit recorder");
     batch->submitted = true;
     batch->serial = ++submissions;
-    batch->submittedAt = std::chrono::steady_clock::now();
+    AGC_DIAGNOSTIC(batch->submittedAt = std::chrono::steady_clock::now());
     if (DrawProfiled()) {
         const auto us = std::chrono::duration<double, std::micro>(batch->submittedAt - submitStart).count();
-        ++submitCount;
+        AGC_DIAGNOSTIC(++submitCount);
         submitUs += us;
         submitMaxUs = std::max(submitMaxUs, us);
         if (auto* frame = PerformanceContext::Current()) frame->Add(frame->Get("Recorder", "submit"), batch->submittedAt - submitStart);
@@ -2456,13 +2532,17 @@ VkResult WaitTimeline(VkDevice device, VkSemaphore timeline, PFN_vkWaitSemaphore
 
 void Recorder::WaitSerial(std::uint64_t serial) {
     if (timeline == VK_NULL_HANDLE || serial == 0) return;
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     const auto start = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     const UnlockedWaiter waiter{id};
     const auto result = WaitTimeline(context.device, timeline, context.Function<PFN_vkWaitSemaphoresKHR>("vkWaitSemaphoresKHR"), serial);
     if (profile) {
-        unlockedWaits.fetch_add(1, std::memory_order_relaxed);
-        unlockedWaitedUs.fetch_add(static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count()), std::memory_order_relaxed);
+        AGC_DIAGNOSTIC(unlockedWaits.fetch_add(1, std::memory_order_relaxed));
+        AGC_DIAGNOSTIC(unlockedWaitedUs.fetch_add(static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count()), std::memory_order_relaxed));
     }
     Check(result, "vkWaitSemaphoresKHR recorder");
 }
@@ -2471,7 +2551,7 @@ void Recorder::FinishUpTo(std::uint64_t serial) {
     // A drain: the wait already happened (unlocked), the fences are signaled, so the source-0 wait
     // recorded here is the bookkeeping only (a caller that did not wait first, WaitForLeases, shows
     // up in the site table by its own address).
-    ++syncCounts[0];
+    AGC_DIAGNOSTIC(++syncCounts[0]);
     announcedSource = 4;
     const void* site = std::exchange(announcedSite, nullptr);
     const auto previousSite = inFlight.empty() || inFlight.front()->serial > serial ? activeSyncSite : BeginSyncSite(0, site != nullptr ? site : __builtin_return_address(0));
@@ -2555,7 +2635,7 @@ void Recorder::SyncThrough(std::uint64_t address, std::size_t bytes, bool waitUn
     }
     if (targetSerial == 0) return;
     if (unsignaled(targetSerial)) ++hookRealWaits;
-    targetedSyncs.fetch_add(1, std::memory_order_relaxed);
+    AGC_DIAGNOSTIC(targetedSyncs.fetch_add(1, std::memory_order_relaxed));
     const RestoreSyncSite restoreSite{BeginSyncSite(source, site != nullptr ? site : __builtin_return_address(0))};
     // Batches are in flight in serial order. A completion's own guest access can sync re-entrantly
     // and finish the target first (and a new batch may reuse its allocation, so the serial, not the
@@ -2565,7 +2645,7 @@ void Recorder::SyncThrough(std::uint64_t address, std::size_t bytes, bool waitUn
         inFlight.pop_front();
         finish(std::move(batch), true, source);
     }
-    batchesLeftInFlight.fetch_add(inFlight.size(), std::memory_order_relaxed);
+    AGC_DIAGNOSTIC(batchesLeftInFlight.fetch_add(inFlight.size(), std::memory_order_relaxed));
 }
 
 namespace {
@@ -2590,7 +2670,11 @@ struct SyncWaitStats {
     // Batches up to the targets, by the queue that opened them: whether a wait for one queue's
     // producer is really a wait for the other queues' batches ahead of it on the one timeline.
     std::map<std::uint32_t, std::uint64_t> aheadByQueue;
+#if !defined(NDEBUG)
     std::chrono::steady_clock::time_point lastReport = std::chrono::steady_clock::now();
+#else
+    std::chrono::steady_clock::time_point lastReport{};
+#endif
 };
 
 SyncWaitStats& SyncWaits() {
@@ -2599,7 +2683,11 @@ SyncWaitStats& SyncWaits() {
 }
 
 bool TraceCapSync() {
+#if !defined(NDEBUG)
     static const bool trace = std::getenv("APS5_TRACE_CAPSYNC") != nullptr;
+#else
+    static constexpr bool trace = false;
+#endif
     return trace;
 }
 
@@ -2745,13 +2833,13 @@ bool Recorder::syncThroughUnlocked(std::uint64_t address, std::uint64_t end, int
     // The completions up to the target, under the mutex again; the fences are signaled, so the
     // waits inside finish() return at once (charged to the same site entry). Another thread may
     // have finished some meanwhile.
-    targetedSyncs.fetch_add(1, std::memory_order_relaxed);
+    AGC_DIAGNOSTIC(targetedSyncs.fetch_add(1, std::memory_order_relaxed));
     while (!inFlight.empty() && inFlight.front()->serial <= targetSerial) {
         auto batch = std::move(inFlight.front());
         inFlight.pop_front();
         finish(std::move(batch), true, source);
     }
-    batchesLeftInFlight.fetch_add(inFlight.size(), std::memory_order_relaxed);
+    AGC_DIAGNOSTIC(batchesLeftInFlight.fetch_add(inFlight.size(), std::memory_order_relaxed));
     return true;
 }
 
@@ -2797,11 +2885,20 @@ void Recorder::finish(std::unique_ptr<Batch> batch, bool wait, int source) {
     } finishingScope{*this, batch.get()};
     finishing.push_back(batch.get());
     if (wait) {
+#if !defined(NDEBUG)
         // APS5_PROFILE_DRAW: how long the CPU waits for recorded GPU work, reported every 10 s.
+#if !defined(NDEBUG)
         static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+        static constexpr bool profile = false;
+#endif
         static double waitedMs = 0;
         static std::uint64_t waits = 0;
+#if !defined(NDEBUG)
         static auto lastReport = std::chrono::steady_clock::now();
+#else
+        static std::chrono::steady_clock::time_point lastReport{};
+#endif
         const auto waitStart = std::chrono::steady_clock::now();
         // A fence still unsignaled here makes this a real GPU wait under the mutex (finish runs
         // under it): the [lock] line's 'locked GPU waits'.
@@ -2833,6 +2930,7 @@ void Recorder::finish(std::unique_ptr<Batch> batch, bool wait, int source) {
                 }
             }
         } report{profile, source, waitStart, *this, signaledAtStart};
+#endif
         const auto waitFences = function(waitForFences, "vkWaitForFences");
         auto result = waitFences(context.device, 1, &batch->fence, VK_TRUE, 5'000'000'000ull);
         for (int waited = 5; result == VK_TIMEOUT; waited += 5) {
@@ -2851,6 +2949,7 @@ void Recorder::finish(std::unique_ptr<Batch> batch, bool wait, int source) {
     }
     readGpuTiming(*batch);
     readSamples(*batch);
+#if !defined(NDEBUG)
     if (batch->serial != 0) {
         std::lock_guard ringLock(completedMutex);
         auto& entry = completed[batch->serial % completed.size()];
@@ -2858,13 +2957,14 @@ void Recorder::finish(std::unique_ptr<Batch> batch, bool wait, int source) {
         entry.gpuStartNs = batch->gpuStartNs;
         entry.gpuEndNs = batch->gpuEndNs;
         entry.submittedAt = batch->submittedAt;
-        entry.fenceSeenAt = std::chrono::steady_clock::now();
+        AGC_DIAGNOSTIC(entry.fenceSeenAt = std::chrono::steady_clock::now());
         entry.readGeneration = batch->readGeneration;
         entry.reads.clear();
         if (FlipReadCheck()) {
             for (const auto& read : batch->reads) entry.reads.emplace_back(read.begin, read.end);
         }
     }
+#endif
     // Completions store GPU results to guest memory; a failing one is reported, the rest still run.
     // Timed (APS5_PROFILE_DRAW) with the release of the kept objects: both run under whichever hold
     // reaped or synced the batch. Inside them the flush hook makes no pending-write wait (SyncThrough).
@@ -2942,3 +3042,5 @@ void Recorder::release(Batch& batch) noexcept {
 }
 
 }
+
+#undef AGC_DIAGNOSTIC

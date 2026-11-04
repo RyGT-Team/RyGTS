@@ -39,8 +39,13 @@ struct KernelEventFlagPrivate {
 };
 
 static bool TraceSync() {
+#if !defined(NDEBUG)
+
     static const bool enabled = std::getenv("APS5_TRACE_SYNC") != nullptr;
     return enabled;
+#else
+    return false;
+#endif
 }
 
 static bool IsValidWaitMode(uint32_t waitMode) {
@@ -145,7 +150,9 @@ int APS5_VABI sceKernelWaitEventFlag(KernelEventFlag ef, uint64_t bit_pattern, u
     const auto released = [&] { return ef->_deleted || ef->_cancelGeneration != generation || IsSatisfied(ef->_pattern, bit_pattern, wait_mode); };
     ++ef->_waiters;
     bool timedOut = false;
+#if !defined(NDEBUG)
     const auto waitStart = std::chrono::steady_clock::now();
+#endif
     if (timeout) {
         const std::uint64_t deadline = TimedWait::DeadlineNanos(*timeout);
         timedOut = !ef->_changed.WaitUntil(lock, deadline, released);
@@ -153,7 +160,9 @@ int APS5_VABI sceKernelWaitEventFlag(KernelEventFlag ef, uint64_t bit_pattern, u
     } else {
         ef->_changed.Wait(lock, released);
     }
+#if !defined(NDEBUG)
     KernelTraceWait_nid_postfix("evf", __builtin_return_address(0), static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - waitStart).count()), timedOut);
+#endif
     --ef->_waiters;
     if (ef->_deleted) {
         const bool last = ef->_waiters == 0;

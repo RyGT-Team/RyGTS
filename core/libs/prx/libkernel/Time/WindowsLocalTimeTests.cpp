@@ -21,6 +21,20 @@ int main(int argc,char** argv) {
     auto zone=reinterpret_cast<TzFn>(GetProcAddress(m,"sceKernelGettimezone"));
     auto now=reinterpret_cast<NowFn>(GetProcAddress(m,"gettimeofday_nid_postfix"));
     Check(utc&&local&&zone&&now,"clock exports");
+    using CounterFn=std::uint64_t(APS5_VABI *)();
+    auto counter=reinterpret_cast<CounterFn>(GetProcAddress(m,"sceKernelGetProcessTimeCounter"));
+    auto frequency=reinterpret_cast<CounterFn>(GetProcAddress(m,"sceKernelGetProcessTimeCounterFrequency"));
+    auto micros=reinterpret_cast<CounterFn>(GetProcAddress(m,"sceKernelGetProcessTime"));
+    Check(counter&&frequency&&micros,"process clock exports");
+    Check(frequency()==1000000000ULL,"process counter uses nanosecond frequency");
+    (void)micros(); // Initialize the shared process epoch before measuring deltas.
+    const auto beforeCounter=counter(), beforeMicros=micros();
+    Sleep(10);
+    const auto afterMicros=micros(), afterCounter=counter();
+    Check(afterCounter>=beforeCounter && afterMicros>=beforeMicros,"process clocks monotonic");
+    Check((afterCounter-beforeCounter)/1000+1>=afterMicros-beforeMicros,"counter delta covers the enclosed microsecond interval");
+    const auto lower=counter(), value=micros(), upper=counter();
+    Check(lower/1000<=value && value<=upper/1000,"process time shares the counter epoch and units");
     for(unsigned month : {1u,7u}) {
         SYSTEMTIME universal{}; universal.wYear=2026; universal.wMonth=WORD(month); universal.wDay=15; universal.wHour=12;
         SYSTEMTIME expected{}; Check(SystemTimeToTzSpecificLocalTimeEx(nullptr,&universal,&expected)!=0,"Windows reference conversion");

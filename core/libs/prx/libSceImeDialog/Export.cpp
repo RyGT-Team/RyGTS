@@ -88,9 +88,11 @@ int APS5_VABI sceImeDialogGetResult(Result* result) {
 int APS5_VABI sceImeDialogGetStatus(void) {
     if (static const auto f = Renderer<NoArgFn>("IADmD4tScBY"); f) return f();
     if (status.load() == StatusRunning && ++polls > 1) status = StatusFinished;
+#ifndef NDEBUG
     static std::atomic<int> traced{0};
     const int count = traced.fetch_add(1);
     if (count < 8 || count % 2000 == 0) std::fprintf(stderr, "[ime] GetStatus #%d -> %d\n", count, status.load());
+#endif
     return status.load();
 }
 

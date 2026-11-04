@@ -2,7 +2,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(NDEBUG)
 #include <windows.h>
 #include <tlhelp32.h>
 #include <algorithm>
@@ -20,7 +20,7 @@
 
 namespace AgcDriver {
 
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(NDEBUG)
 namespace {
 
 std::jthread processSamplerThread;

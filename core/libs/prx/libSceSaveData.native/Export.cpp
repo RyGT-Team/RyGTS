@@ -191,6 +191,7 @@ bool param_field(std::uint32_t param_type, ParamField* field) {
     }
 }
 
+#if !defined(NDEBUG)
 int traceLimit() {
     static const int limit = std::getenv("APS5_SAVEDATA_TRACE") != nullptr ? std::numeric_limits<int>::max() : 3;
     return limit;
@@ -204,6 +205,9 @@ int traceLimit() {
             std::fflush(stderr); \
         } \
     } while (0)
+#else
+#define SAVEDATA_TRACE(...) ((void)0)
+#endif
 }  // namespace
 
 extern "C" {

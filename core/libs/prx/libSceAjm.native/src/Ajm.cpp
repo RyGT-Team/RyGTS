@@ -41,14 +41,22 @@ constexpr std::uint32_t CODEC_AT9 = 1;
 
 // APS5_TRACE_AJM=1 logs every job the title submits and what the library writes back.
 bool TraceEnabled() {
+#if !defined(NDEBUG)
     static const bool enabled = std::getenv("APS5_TRACE_AJM") != nullptr;
     return enabled;
+#else
+    return false;
+#endif
 }
 
+#if !defined(NDEBUG)
 #define AJM_TRACE(...) \
     do { \
         if (TraceEnabled()) std::fprintf(stderr, __VA_ARGS__); \
     } while (0)
+#else
+#define AJM_TRACE(...) ((void)0)
+#endif
 
 constexpr std::uint64_t RUN_MULTIPLE_FRAMES = 1ull << 12;
 constexpr std::uint64_t SIDEBAND_GAPLESS_DECODE = 1ull << 45;
@@ -326,8 +334,12 @@ void RunAt9(Instance& instance, const JobHeader& job, const AjmBuffer* inputs, c
     const std::size_t sampleBytes = encoding == 0 ? sizeof(std::int16_t) : sizeof(std::int32_t);
     const std::size_t frameBytes = frameSamples * channels * sampleBytes;
     std::vector<std::uint8_t> pcm(frameBytes);
+#if !defined(NDEBUG)
     static const bool traceFlags = std::getenv("APS5_TRACE_AJM") != nullptr;
+#endif
+#if !defined(NDEBUG)
     if (traceFlags && instance.totalDecodedSamples == 0 && consumedFirstRun(instance)) std::fprintf(stderr, "[ajm] instance %u flags 0x%llx (encoding %u)\n", job.instance, static_cast<unsigned long long>(instance.flags), encoding);
+#endif
 
     std::int32_t result = 0;
     int decodeStatus = 0;

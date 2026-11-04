@@ -15,6 +15,12 @@
 #include <mutex>
 #include <stdexcept>
 
+#if !defined(NDEBUG)
+#define AGC_DIAGNOSTIC(...) __VA_ARGS__
+#else
+#define AGC_DIAGNOSTIC(...) ((void)0)
+#endif
+
 namespace AgcDriver::Graphics {
 
 namespace {
@@ -42,13 +48,21 @@ std::uint32_t SlabUnits() {
 
 // APS5_TRACE_SHADOW=<n>: the first n publishes, the first 64 seeds, every evict and retire.
 std::atomic<std::int64_t> tracePublishesLeft{[] {
+#if !defined(NDEBUG)
     const char* text = std::getenv("APS5_TRACE_SHADOW");
+#else
+    constexpr const char* text = nullptr;
+#endif
     return text != nullptr ? static_cast<std::int64_t>(std::strtoll(text, nullptr, 10)) : std::int64_t{0};
 }()};
 std::atomic<std::int64_t> traceSeedsLeft{64};
 
 bool TraceEnabled() {
+#if !defined(NDEBUG)
     static const bool enabled = std::getenv("APS5_TRACE_SHADOW") != nullptr;
+#else
+    static constexpr bool enabled = false;
+#endif
     return enabled;
 }
 
@@ -270,9 +284,9 @@ void verifyPublished(const UnitShadow& shadow, const std::vector<SlabCopies>& co
             batch.SubmitAndWait();
             host.Invalidate();
             const auto address = shadow.importBase + region.dstOffset;
-            Stats().verified.fetch_add(1, std::memory_order_relaxed);
+            AGC_DIAGNOSTIC(Stats().verified.fetch_add(1, std::memory_order_relaxed));
             if (!GuestMemory::Accessible(reinterpret_cast<const void*>(address), static_cast<std::size_t>(region.size)) || std::memcmp(reinterpret_cast<const void*>(address), host.Bytes().data(), static_cast<std::size_t>(region.size)) != 0) {
-                Stats().mismatches.fetch_add(1, std::memory_order_relaxed);
+                AGC_DIAGNOSTIC(Stats().mismatches.fetch_add(1, std::memory_order_relaxed));
                 static std::atomic<int> reports{0};
                 if (reports.fetch_add(1) < 8) std::fprintf(stderr, "[shadow] verify: published bytes differ from the slab at 0x%llx+0x%llx\n", static_cast<unsigned long long>(address), static_cast<unsigned long long>(region.size));
             }
@@ -315,7 +329,7 @@ std::size_t publishUnits(const std::shared_ptr<UnitShadow>& shadow, std::uint64_
             if (changed[k] == GuestMemory::BlockWritten) {
                 // Newer bytes reached the import since the retile: the slab's are dead.
                 shadow->generation[unit] = 0;
-                (cpu[k] != 0 ? Stats().staleDroppedCpu : Stats().staleDroppedDriver).fetch_add(1, std::memory_order_relaxed);
+                AGC_DIAGNOSTIC((cpu[k] != 0 ? Stats().staleDroppedCpu : Stats().staleDroppedDriver).fetch_add(1, std::memory_order_relaxed));
                 continue;
             }
             const auto slabIndex = static_cast<std::size_t>(unit / SlabUnits());
@@ -343,12 +357,14 @@ std::size_t publishUnits(const std::shared_ptr<UnitShadow>& shadow, std::uint64_
         shadow->Recount();
     }
     if (units == 0) return 0;
-    Stats().published[static_cast<std::size_t>(reason)].fetch_add(1, std::memory_order_relaxed);
-    Stats().publishedBytes[static_cast<std::size_t>(reason)].fetch_add(bytes, std::memory_order_relaxed);
+    AGC_DIAGNOSTIC(Stats().published[static_cast<std::size_t>(reason)].fetch_add(1, std::memory_order_relaxed));
+    AGC_DIAGNOSTIC(Stats().publishedBytes[static_cast<std::size_t>(reason)].fetch_add(bytes, std::memory_order_relaxed));
+#if !defined(NDEBUG)
     if (tracePublishesLeft.load(std::memory_order_relaxed) > 0 && tracePublishesLeft.fetch_sub(1, std::memory_order_relaxed) > 0) {
         const auto packet = GuestMemory::CurrentPacket();
         std::fprintf(stderr, "[shadow] publish %s: 0x%llx+0x%llx, %zu units, %.2f MiB, %zu slabs (packet 0x%x queue 0x%x)\n", ReasonNames[static_cast<std::size_t>(reason)], static_cast<unsigned long long>(ranges.front().first), static_cast<unsigned long long>(ranges.back().second - ranges.front().first), units, bytes / 1048576.0, copies.size(), packet.opcode, packet.queue);
     }
+#endif
     recordCopies(*shadow, copies, ranges, bytes);
     if (ShadowVerify()) verifyPublished(*shadow, copies);
     return units;
@@ -409,7 +425,7 @@ bool evictOne(Shadows& registry) {
     registry.liveBytes -= SlabBytes(*slab);
     --registry.liveSlabs;
     slab.reset();
-    Stats().evictions.fetch_add(1, std::memory_order_relaxed);
+    AGC_DIAGNOSTIC(Stats().evictions.fetch_add(1, std::memory_order_relaxed));
     return true;
 }
 
@@ -421,14 +437,22 @@ bool UnitShadowEnabled() {
 }
 
 bool ShadowVerify() {
+#if !defined(NDEBUG)
     static const bool verify = std::getenv("APS5_SHADOW_VERIFY") != nullptr;
+#else
+    static constexpr bool verify = false;
+#endif
     return verify;
 }
 
 void NoteShadowSeed(std::uint64_t begin, std::uint64_t end) {
-    Stats().seeds.fetch_add(1, std::memory_order_relaxed);
-    Stats().seedBytes.fetch_add(end - begin, std::memory_order_relaxed);
+#if !defined(NDEBUG)
+    AGC_DIAGNOSTIC(Stats().seeds.fetch_add(1, std::memory_order_relaxed));
+    AGC_DIAGNOSTIC(Stats().seedBytes.fetch_add(end - begin, std::memory_order_relaxed));
     if (traceSeedsLeft.load(std::memory_order_relaxed) > 0 && traceSeedsLeft.fetch_sub(1, std::memory_order_relaxed) > 0) std::fprintf(stderr, "[shadow] seed 0x%llx+0x%llx from the import\n", static_cast<unsigned long long>(begin), static_cast<unsigned long long>(end - begin));
+#else
+
+#endif
 }
 
 PublishReason PublishReasonFor(const char* flushReason) {
@@ -465,7 +489,7 @@ std::size_t PublishShadow(std::uint64_t address, std::size_t bytes, PublishScope
     if (Recorder::InCompletion() && GuestMemory::CurrentReadSite() == GuestMemory::ReadSite::Store) {
         // The store's own stamp makes the unit stale; a publish recorded now would land over the
         // store when the batch runs (the completion is not waited for).
-        Stats().skippedInCompletion.fetch_add(1, std::memory_order_relaxed);
+        AGC_DIAGNOSTIC(Stats().skippedInCompletion.fetch_add(1, std::memory_order_relaxed));
         return 0;
     }
     const auto end = bytes > std::numeric_limits<std::uint64_t>::max() - address ? std::numeric_limits<std::uint64_t>::max() : address + bytes;
@@ -543,8 +567,8 @@ std::optional<ShadowDestination> ShadowDestinationFor(const Context& context, co
                 if (registry.liveBytes + needed <= BudgetBytes()) break;
             }
             if (!evictOne(registry)) {
-                Stats().refused.fetch_add(1, std::memory_order_relaxed);
-                Stats().refusedBytes.fetch_add(end - begin, std::memory_order_relaxed);
+                AGC_DIAGNOSTIC(Stats().refused.fetch_add(1, std::memory_order_relaxed));
+                AGC_DIAGNOSTIC(Stats().refusedBytes.fetch_add(end - begin, std::memory_order_relaxed));
                 return std::nullopt;
             }
         }
@@ -552,14 +576,14 @@ std::optional<ShadowDestination> ShadowDestinationFor(const Context& context, co
         std::lock_guard lock(registry.mutex);
         if (slab == nullptr) {
             shadow->slabFailedUntil[slabIndex] = Recorder::Presents() + 1;
-            Stats().refused.fetch_add(1, std::memory_order_relaxed);
-            Stats().refusedBytes.fetch_add(end - begin, std::memory_order_relaxed);
+            AGC_DIAGNOSTIC(Stats().refused.fetch_add(1, std::memory_order_relaxed));
+            AGC_DIAGNOSTIC(Stats().refusedBytes.fetch_add(end - begin, std::memory_order_relaxed));
             return std::nullopt;
         }
         if (shadow->slabs[slabIndex] == nullptr) {
             shadow->slabs[slabIndex] = slab;
             registry.liveBytes += SlabBytes(*slab);
-            registry.peakBytes = std::max(registry.peakBytes, registry.liveBytes);
+            AGC_DIAGNOSTIC(registry.peakBytes = std::max(registry.peakBytes, registry.liveBytes));
             ++registry.liveSlabs;
         }
     }
@@ -597,7 +621,7 @@ std::vector<ShadowRun> ShadowSources(const Context& context, const HostImport& i
     if (runs.empty()) return result;
     const auto importPiece = [&](std::uint64_t begin, std::uint64_t end) {
         result.push_back({begin, end, import.buffer, surfaceBase + begin - import.base, false, nullptr});
-        Stats().detiledImportBytes.fetch_add(end - begin, std::memory_order_relaxed);
+        AGC_DIAGNOSTIC(Stats().detiledImportBytes.fetch_add(end - begin, std::memory_order_relaxed));
     };
     std::shared_ptr<UnitShadow> shadow;
     if (UnitShadowEnabled()) {
@@ -608,7 +632,7 @@ std::vector<ShadowRun> ShadowSources(const Context& context, const HostImport& i
     }
     if (shadow == nullptr) {
         for (const auto& [begin, end] : runs) importPiece(begin, end);
-        Stats().detiledImport.fetch_add(1, std::memory_order_relaxed);
+        AGC_DIAGNOSTIC(Stats().detiledImport.fetch_add(1, std::memory_order_relaxed));
         return result;
     }
     const auto first = shadow->UnitOf(surfaceBase + runs.front().first);
@@ -637,7 +661,7 @@ std::vector<ShadowRun> ShadowSources(const Context& context, const HostImport& i
         for (auto unit = tailFirst; unit <= tailLast; ++unit) (fresh[static_cast<std::size_t>(unit - first)] != 0 ? anyFresh : anyImport) = true;
         if (!anyFresh || !anyImport) continue;
         PublishShadow(surfaceBase + tailBegin, static_cast<std::size_t>(tailEnd - tailBegin), PublishScope::Whole, PublishReason::TailMip);
-        Stats().tailPublishes.fetch_add(1, std::memory_order_relaxed);
+        AGC_DIAGNOSTIC(Stats().tailPublishes.fetch_add(1, std::memory_order_relaxed));
         for (auto unit = tailFirst; unit <= tailLast; ++unit) fresh[static_cast<std::size_t>(unit - first)] = 0;
     }
     std::uint64_t shadowBytes = 0, importBytes = 0;
@@ -664,12 +688,12 @@ std::vector<ShadowRun> ShadowSources(const Context& context, const HostImport& i
         }
     }
     if (shadowBytes != 0) {
-        Stats().detiledShadow.fetch_add(1, std::memory_order_relaxed);
-        Stats().detiledShadowBytes.fetch_add(shadowBytes, std::memory_order_relaxed);
+        AGC_DIAGNOSTIC(Stats().detiledShadow.fetch_add(1, std::memory_order_relaxed));
+        AGC_DIAGNOSTIC(Stats().detiledShadowBytes.fetch_add(shadowBytes, std::memory_order_relaxed));
     }
     if (importBytes != 0) {
-        Stats().detiledImport.fetch_add(1, std::memory_order_relaxed);
-        Stats().detiledImportBytes.fetch_add(importBytes, std::memory_order_relaxed);
+        AGC_DIAGNOSTIC(Stats().detiledImport.fetch_add(1, std::memory_order_relaxed));
+        AGC_DIAGNOSTIC(Stats().detiledImportBytes.fetch_add(importBytes, std::memory_order_relaxed));
     }
     if (ShadowVerify()) {
         std::vector<std::uint8_t> changed, cpu;
@@ -678,8 +702,8 @@ std::vector<ShadowRun> ShadowSources(const Context& context, const HostImport& i
         for (const auto& run : result) {
             if (!run.shadow) continue;
             for (auto unit = shadow->UnitOf(surfaceBase + run.begin); unit <= shadow->UnitOf(surfaceBase + run.end - 1); ++unit) {
-                Stats().verified.fetch_add(1, std::memory_order_relaxed);
-                if (changed[static_cast<std::size_t>(unit - first)] != 0) Stats().mismatches.fetch_add(1, std::memory_order_relaxed);
+                AGC_DIAGNOSTIC(Stats().verified.fetch_add(1, std::memory_order_relaxed));
+                if (changed[static_cast<std::size_t>(unit - first)] != 0) AGC_DIAGNOSTIC(Stats().mismatches.fetch_add(1, std::memory_order_relaxed));
             }
         }
     }
@@ -715,12 +739,12 @@ void MarkShadowed(const HostImport& import, std::span<const ShadowedRange> range
         shadow->Recount();
     }
     if (lost != 0) {
-        Stats().slabLost.fetch_add(lost, std::memory_order_relaxed);
+        AGC_DIAGNOSTIC(Stats().slabLost.fetch_add(lost, std::memory_order_relaxed));
         static std::atomic<int> reports{0};
         if (reports.fetch_add(1) < 4) std::fprintf(stderr, "[shadow] %llu retiled units of import 0x%llx lost their slab before they were marked\n", static_cast<unsigned long long>(lost), static_cast<unsigned long long>(import.base));
     }
-    Stats().retiled.fetch_add(1, std::memory_order_relaxed);
-    Stats().retiledBytes.fetch_add(bytes, std::memory_order_relaxed);
+    AGC_DIAGNOSTIC(Stats().retiled.fetch_add(1, std::memory_order_relaxed));
+    AGC_DIAGNOSTIC(Stats().retiledBytes.fetch_add(bytes, std::memory_order_relaxed));
     // The resource cache's pending memos (fastRevalidate) must see the change of the surface's
     // source, as they see a write-back.
     StorageTexture::BumpPendingSerial();
@@ -753,13 +777,13 @@ void RetireShadow(const Context& context, const HostImport& import, const std::f
         }
         shadow->Recount();
     }
-    if (dropped != 0) Stats().droppedOnRetire.fetch_add(dropped, std::memory_order_relaxed);
+    if (dropped != 0) AGC_DIAGNOSTIC(Stats().droppedOnRetire.fetch_add(dropped, std::memory_order_relaxed));
     std::size_t published = 0;
     if (any) {
         if (GuestMemory::GpuMutex().HeldByThisThread() && shadow->context.device == context.device) {
             published = publishUnits(shadow, 0, shadow->Units() - 1, selected, PublishReason::Retire);
         } else {
-            Stats().lostOnRetire.fetch_add(shadow->liveUnits, std::memory_order_relaxed);
+            AGC_DIAGNOSTIC(Stats().lostOnRetire.fetch_add(shadow->liveUnits, std::memory_order_relaxed));
             static std::atomic<int> reports{0};
             if (reports.fetch_add(1) < 4) std::fprintf(stderr, "[shadow] import 0x%llx+0x%llx retired outside the device lock: %u shadowed units lost\n", static_cast<unsigned long long>(import.base), static_cast<unsigned long long>(import.bytes), shadow->liveUnits);
         }
@@ -772,7 +796,7 @@ void RetireShadow(const Context& context, const HostImport& import, const std::f
         registry.liveBytes -= SlabBytes(*slab);
         --registry.liveSlabs;
     }
-    ++registry.retired;
+    AGC_DIAGNOSTIC(++registry.retired);
     if (TraceEnabled()) std::fprintf(stderr, "[shadow] retire import 0x%llx+0x%llx: %zu units published, %llu dropped (memory no longer registered)\n", static_cast<unsigned long long>(import.base), static_cast<unsigned long long>(import.bytes), published, static_cast<unsigned long long>(dropped));
     registry.byBase.erase(found);
 }
@@ -808,6 +832,7 @@ void DestroyShadows(VkDevice device) {
 }
 
 std::string ShadowReport() {
+#if !defined(NDEBUG)
     auto& statistics = Stats();
     const auto take = [](std::atomic<std::uint64_t>& counter) { return static_cast<unsigned long long>(counter.exchange(0, std::memory_order_relaxed)); };
     const auto mib = [](unsigned long long bytes) { return bytes / 1048576.0; };
@@ -844,6 +869,11 @@ std::string ShadowReport() {
         line += text;
     }
     return line;
+#else
+    return {};
+#endif
 }
 
 }
+
+#undef AGC_DIAGNOSTIC

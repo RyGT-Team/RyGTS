@@ -38,6 +38,13 @@ std::unordered_map<std::string, std::string> ResolveNids(const std::vector<std::
     result.reserve(exportedNames.size());
 
     for (const std::string& name : exportedNames) {
+        // Host-side RytyNet C++ helpers are imported by other runtime modules by
+        // their mangled names. Guest-facing C exports still receive NIDs.
+        if (libraryName == "libRytyNet" &&
+            (name.starts_with("_ZN7RytyNet") || name.starts_with("_ZNK7RytyNet"))) {
+            result[name] = name;
+            continue;
+        }
         if (excludedExports.contains(NormalizeExportName(name))) {
             result[name] = name;
             continue;

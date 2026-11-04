@@ -254,6 +254,7 @@ int APS5_VABI scePthreadMutexLock(PthreadMutex* mutex);
 int APS5_VABI scePthreadMutexUnlock(PthreadMutex* mutex);
 }
 
+#if !defined(NDEBUG)
 static void ReportTimedWait(const char* name, const std::function<void()>& body) {
     std::vector<double> samples(200);
     for (auto& sample : samples) {
@@ -293,6 +294,7 @@ static const bool g_timerSelfTest = [] {
     return true;
 }();
 #endif
+#endif
 
 extern "C" {
 
@@ -311,6 +313,8 @@ std::uint64_t APS5_VABI sceKernelGetProcessTimeCounterFrequency() {
 // Debug aid: APS5_TRACE_USLEEP reports every 2000 calls which guest call sites sleep, so a CPU
 // thread polling for GPU or I/O completion can be found (offsets are relative to the executable).
 static void TraceSleep(const void* caller, std::uint64_t microseconds) {
+#if !defined(NDEBUG)
+
     static const bool enabled = std::getenv("APS5_TRACE_USLEEP") != nullptr;
     if (!enabled) return;
     static std::mutex mutex;
@@ -331,10 +335,12 @@ static void TraceSleep(const void* caller, std::uint64_t microseconds) {
     std::fprintf(stderr, "[usleep] %llu calls:", static_cast<unsigned long long>(calls));
     for (std::size_t i = 0; i < hot.size() && i < 6; ++i) std::fprintf(stderr, " exe+0x%llx x%llu (%llu us)", static_cast<unsigned long long>(hot[i].first - image), static_cast<unsigned long long>(hot[i].second.first), static_cast<unsigned long long>(hot[i].second.second));
     std::fprintf(stderr, "\n");
+#endif
 }
 
 extern "C++" {
 
+#if !defined(NDEBUG)
 #ifdef _WIN32
 using DiagRecordFn = void (*)(std::uint32_t, std::uint64_t, std::uint64_t);
 
@@ -397,9 +403,12 @@ std::uint64_t KernelDiagWaker(const void* caller) {
 #endif
 }
 
+#endif
 }  // extern "C++"
 
 void KernelTraceWait_nid_postfix(const char* kind, const void* caller, std::uint64_t waitedNanos, bool timedOut) {
+#if !defined(NDEBUG)
+
     if (KernelDiagEnabled()) {
         const KernelDiagZone zone = kind[0] == 'e' ? (kind[1] == 'q' ? KernelDiagZone::Equeue : KernelDiagZone::EventFlag)
                                   : kind[0] == 's' ? KernelDiagZone::Sema : KernelDiagZone::Cond;
@@ -440,6 +449,7 @@ void KernelTraceWait_nid_postfix(const char* kind, const void* caller, std::uint
     }
     std::fprintf(stderr, "\n");
     for (auto& [name, s] : sites) s = Site{};
+#endif
 }
 
 int APS5_VABI sceKernelUsleep_nid_postfix(KernelUseconds microseconds) {

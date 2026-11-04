@@ -45,12 +45,20 @@ void Driver::run(std::uint32_t id) noexcept {
     GuestMemory::TagGpuLockThread(id);
     if (id == 0) StartWorkerSampler();
     Submission submission;
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     auto& costs = submissionCosts(id);
     try {
         for (;;) {
             submission = Submission{};
+#if !defined(NDEBUG)
             static const bool traceGpu = std::getenv("APS5_TRACE_GPU") != nullptr;
+#else
+            static constexpr bool traceGpu = false;
+#endif
             {
                 std::unique_lock lock(mutex);
                 auto& worker = workers.at(id);

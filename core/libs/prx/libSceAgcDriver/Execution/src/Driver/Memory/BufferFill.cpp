@@ -33,7 +33,12 @@ bool Driver::fillClearExactOnly() {
 }
 
 void Driver::fillClearCount(const Graphics::StorageTexture::FillCoverage& coverage, std::size_t bytes, std::span<const std::uint32_t, 4> pattern, std::size_t discarded, bool cleared, const char* refusal) {
+#if !defined(NDEBUG)
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     if (!profile) return;
     using FillCover = Graphics::StorageTexture::FillCover;
     static constexpr std::array<const char*, 8> names{"none", "exact", "inside", "around", "straddle", "several", "keys", "layer"};
@@ -43,7 +48,11 @@ void Driver::fillClearCount(const Graphics::StorageTexture::FillCoverage& covera
     static std::map<std::string, std::uint64_t> refusals;
     static std::map<std::uint32_t, std::uint64_t> keyCodes;
     static std::uint64_t clears = 0, clearedBytes = 0, layerClears = 0, withOthers = 0, othersInside = 0, discards = 0;
+#if !defined(NDEBUG)
     static auto lastReport = std::chrono::steady_clock::now();
+#else
+    static std::chrono::steady_clock::time_point lastReport{};
+#endif
     std::lock_guard lock(countsMutex);
     const auto index = static_cast<std::size_t>(coverage.cover);
     ++counts[index];
@@ -84,6 +93,9 @@ void Driver::fillClearCount(const Graphics::StorageTexture::FillCoverage& covera
     line = "[fill-clear] " + std::to_string(clears) + " fills cleared on resident images (" + std::to_string(clearedBytes >> 20u) + " MiB not stored, " + std::to_string(layerClears) + " one array layer); covers refused:";
     for (const auto& [reason, count] : refusals) line += " " + reason + " " + std::to_string(count);
     std::fprintf(stderr, "%s\n", line.c_str());
+#else
+
+#endif
 }
 
 bool Driver::fillBuffer(QueueState& queue, std::uint32_t queueId, std::span<const std::uint32_t> packet, std::span<const std::uint32_t> code, const std::vector<std::uint32_t>& userData, const ShaderRecompiler::ShaderComputeStageInfo& compute, const std::shared_ptr<VulkanDevice>& localDevice) {
@@ -101,7 +113,11 @@ bool Driver::fillBuffer(QueueState& queue, std::uint32_t queueId, std::span<cons
     const auto base = userData[0] | (static_cast<std::uint64_t>(userData[1] & 0xffffu) << 32u);
     const auto bytes = static_cast<std::size_t>(records * 16u);
     const std::array<std::uint32_t, 4> pattern{userData[4], userData[5], userData[6], userData[7]};
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     static std::atomic<std::uint64_t> fills{0}, filledBytes{0}, cpuFills{0};
 
     static std::uint64_t uniformFills = 0, uniformBytes = 0, patternFills = 0, patternBytes = 0, chainCopies = 0;
@@ -134,7 +150,11 @@ bool Driver::fillBuffer(QueueState& queue, std::uint32_t queueId, std::span<cons
         const auto coverage = Graphics::StorageTexture::ClassifyFill(base, bytes);
         phase(FillClassify);
 
+#if !defined(NDEBUG)
         static const bool traceKeys = std::getenv("APS5_TRACE_DCC_KEYS") != nullptr;
+#else
+        static constexpr bool traceKeys = false;
+#endif
         if (traceKeys && coverage.cover == Graphics::StorageTexture::FillCover::Keys) std::fprintf(stderr, "[dcc-keys] title fills keys 0x%llx+0x%zx with %08x %08x %08x %08x (queue 0x%x)\n", static_cast<unsigned long long>(base), bytes, pattern[0], pattern[1], pattern[2], pattern[3], queueId);
         const bool uniformKeysFill = coverage.cover == Graphics::StorageTexture::FillCover::Keys && std::all_of(pattern.begin(), pattern.end(), [&](std::uint32_t word) { return word == (pattern[0] & 0xffu) * 0x01010101u; });
         if (uniformKeysFill) {

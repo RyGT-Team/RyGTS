@@ -122,7 +122,11 @@ void Driver::recordDeferredLabels(VulkanDevice* localDevice, std::uint32_t queue
         noteLabelStore(label.address, bytes, stamp);
     }
     ++labelGroups;
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
 
     if (profile && (labelGroups.load(std::memory_order_relaxed) & 63u) == 0 && std::chrono::steady_clock::now() - lastSyncReport > std::chrono::seconds(10)) {
         lastSyncReport = std::chrono::steady_clock::now();
@@ -133,7 +137,11 @@ void Driver::recordDeferredLabels(VulkanDevice* localDevice, std::uint32_t queue
 bool Driver::recordLabelsForPacket(VulkanDevice* localDevice, std::uint32_t queue) {
     static const bool packetFlush = !LabelBatchSubmit() && std::getenv("APS5_NO_LABEL_PACKET_FLUSH") == nullptr;
 
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     const auto start = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     if (!deferredLabels().labels.empty()) {
         recordDeferredLabels(localDevice, queue);

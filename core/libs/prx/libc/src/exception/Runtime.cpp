@@ -266,9 +266,14 @@ void CollectTexts(std::uintptr_t object, int depth, char* out, std::size_t size,
 }
 
 void TraceGuestThrow(const void* object, const std::type_info* type, const void* thrower) {
+#if !defined(NDEBUG)
     static const char* setting = std::getenv("APS5_TRACE_GUEST_THROW");
     static const bool all = setting != nullptr && setting[0] == '1';
     static const bool none = setting != nullptr && setting[0] == '0';
+#else
+    constexpr bool all = false;
+    constexpr bool none = false;
+#endif
     static std::atomic<unsigned> reported{0};
     if (none) return;
     const unsigned number = reported.fetch_add(1);

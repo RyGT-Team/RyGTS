@@ -31,6 +31,12 @@
 #include <unordered_map>
 #include <utility>
 
+#if !defined(NDEBUG)
+#define AGC_DIAGNOSTIC(...) __VA_ARGS__
+#else
+#define AGC_DIAGNOSTIC(...) ((void)0)
+#endif
+
 namespace AgcDriver::Graphics {
 
 namespace {
@@ -92,7 +98,11 @@ struct StorageTraffic {
     std::array<std::pair<std::uint64_t, std::uint64_t>, 4> uploads{};
     std::map<std::string, std::pair<std::uint64_t, std::uint64_t>> uploadReasons;
     std::uint64_t directWriteBacks = 0;
+#if !defined(NDEBUG)
     std::chrono::steady_clock::time_point lastReport = std::chrono::steady_clock::now();
+#else
+    std::chrono::steady_clock::time_point lastReport{};
+#endif
 };
 
 StorageTraffic& Traffic() {
@@ -101,6 +111,7 @@ StorageTraffic& Traffic() {
 }
 
 void reportStorageTraffic(StorageTraffic& traffic) {
+#if !defined(NDEBUG)
     const auto now = std::chrono::steady_clock::now();
     if (now - traffic.lastReport < std::chrono::seconds(10)) return;
     traffic.lastReport = now;
@@ -129,9 +140,13 @@ void reportStorageTraffic(StorageTraffic& traffic) {
     traffic.writeBacks.clear();
     traffic.uploadReasons.clear();
     traffic.directWriteBacks = 0;
+#else
+
+#endif
 }
 
 void countStorageUpload(std::size_t path, std::uint64_t bytes) {
+#if !defined(NDEBUG)
     if (!LookupOutcomes::Profiled()) return;
     auto& traffic = Traffic();
     std::lock_guard lock(traffic.mutex);
@@ -141,9 +156,13 @@ void countStorageUpload(std::size_t path, std::uint64_t bytes) {
     ++reason.first;
     reason.second += bytes;
     reportStorageTraffic(traffic);
+#else
+
+#endif
 }
 
 void countStorageWriteBack(std::uint64_t bytes, bool direct) {
+#if !defined(NDEBUG)
     if (!LookupOutcomes::Profiled()) return;
     auto& traffic = Traffic();
     std::lock_guard lock(traffic.mutex);
@@ -152,6 +171,9 @@ void countStorageWriteBack(std::uint64_t bytes, bool direct) {
     totals.second += bytes;
     if (direct) ++traffic.directWriteBacks;
     reportStorageTraffic(traffic);
+#else
+
+#endif
 }
 
 // Every storage image alive, for the fill HLE's cover check (StorageTexture::ClassifyFill): the
@@ -181,6 +203,7 @@ bool BlockTrackingEnabled() {
     return !disabled;
 }
 
+#if !defined(NDEBUG)
 struct PhaseTimer {
     std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
     double lap() {
@@ -190,6 +213,9 @@ struct PhaseTimer {
         return ms;
     }
 };
+#else
+struct PhaseTimer { static constexpr double lap() noexcept { return 0; } };
+#endif
 
 
 VkImageType ImageTypeFor(TextureDimension dimension) {
@@ -225,7 +251,11 @@ void ChainMinLod(const Context& context, const GuestTextureResource& descriptor,
 
 Texture::Texture(const Context& context, TextureDetiler& detiler, const GuestTextureResource& descriptor, VkComponentMapping components, std::span<const std::byte> snapshot, bool depthCompare) : context(context) {
 
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     PhaseTimer timer;
     try {
         const auto colorFormat = ResolveTextureFormat(descriptor.format);
@@ -280,6 +310,7 @@ Texture::Texture(const Context& context, TextureDetiler& detiler, const GuestTex
             // Debug aid: APS5_DUMP_TEXTURE=<hex addresses, comma separated> saves the detiled first mip
             // of those sampled textures on their first 8 uploads as texture_<address>_<n>.raw (u32
             // width, height, VkFormat, then tightly packed rows).
+#if !defined(NDEBUG)
             static const std::string dumpList = [] { const char* text = std::getenv("APS5_DUMP_TEXTURE"); return text ? std::string(text) : std::string(); }();
             bool dumpWanted = false;
             if (!dumpList.empty()) {
@@ -290,6 +321,9 @@ Texture::Texture(const Context& context, TextureDetiler& detiler, const GuestTex
                 // Entries may also be extents ("3840x2160"), since heap addresses change between runs.
                 dumpWanted = dumpList.find(address) != std::string::npos || dumpList.find(extent) != std::string::npos;
             }
+#else
+            constexpr bool dumpWanted = false;
+#endif
             auto staging = std::make_shared<Buffer>(context, static_cast<std::size_t>(guestBytes), VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
             std::memcpy(staging->Bytes().data(), snapshot.data(), snapshot.size());
             auto tiled = std::make_shared<DeviceBuffer>(context, static_cast<std::size_t>(guestBytes), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
@@ -388,7 +422,7 @@ Texture::Texture(const Context& context, TextureDetiler& detiler, const GuestTex
             context.Function<PFN_vkCmdPipelineBarrier>("vkCmdPipelineBarrier")(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &toShaderRead);
 
             if (batch) batch->SubmitAndWait();
-            else ++Profile().recordedUploads;
+            else AGC_DIAGNOSTIC(++Profile().recordedUploads);
             if (profile) Profile().gpu += timer.lap();
             if (dump) {
                 static std::mutex dumpMutex;
@@ -446,7 +480,11 @@ bool Texture::CanCopyFrom(const StorageTexture& source, const GuestTextureResour
 }
 
 Texture::Texture(const Context& context, const std::shared_ptr<StorageTexture>& source, const GuestTextureResource& descriptor, VkComponentMapping components) : context(context), storageSource(source) {
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     PhaseTimer timer;
     try {
         Require(source != nullptr && CanCopyFrom(*source, descriptor), "storage image does not match the sampled texture");
@@ -630,7 +668,11 @@ bool StorageClearAvailable(const Context& context, std::uint32_t guestFormat, Dc
 }
 
 StorageTexture::StorageTexture(const Context& context, TextureDetiler& detiler, const GuestTextureResource& descriptor, std::uint32_t mipLevel) : context(context), detiler(detiler), descriptor(descriptor) {
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     PhaseTimer timer;
     try {
         Require(!IsBlockCompressed(descriptor.format), "block-compressed textures cannot be storage images");
@@ -955,7 +997,11 @@ const char* LookupOutcomes::Name(Kind kind) {
 }
 
 bool LookupOutcomes::Profiled() {
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     return profile;
 }
 
@@ -1113,15 +1159,19 @@ bool StorageTexture::Refresh() {
         }
     }
     if (unchanged) {
-        ++Profile().storageReused;
+        AGC_DIAGNOSTIC(++Profile().storageReused);
         layerGeneration.assign(trackedLayers, current);
         refreshGeneration();
         if (profile) LookupOutcomes::Add(stamped ? LookupOutcomes::RefreshUnchanged : LookupOutcomes::RefreshCompared, start);
         return true;
     }
-    CaptureTrace::Log("refresh image=%llx bytes=%llu generation=%llu dirty=%d keysChanged=%d cpuWrote=%d", static_cast<unsigned long long>(descriptor.baseAddress), static_cast<unsigned long long>(guestBytes), static_cast<unsigned long long>(generation), dirty, keysChanged, cpuWrote);
+    AGC_DIAGNOSTIC(CaptureTrace::Log("refresh image=%llx bytes=%llu generation=%llu dirty=%d keysChanged=%d cpuWrote=%d", static_cast<unsigned long long>(descriptor.baseAddress), static_cast<unsigned long long>(guestBytes), static_cast<unsigned long long>(generation), dirty, keysChanged, cpuWrote));
     // Debug aid: APS5_TRACE_UPLOAD names why a storage image is uploaded again.
+#if !defined(NDEBUG)
     static const bool traceUpload = std::getenv("APS5_TRACE_UPLOAD") != nullptr;
+#else
+    static constexpr bool traceUpload = false;
+#endif
     if (traceUpload) {
         const auto keys = TextureClearKeys(descriptor, guestBytes);
         std::fprintf(stderr, "[upload] 0x%llx+0x%llx %ux%u mips %u: %s (keys %s -> %s, originalValid %d, dirty %d)\n", static_cast<unsigned long long>(descriptor.baseAddress), static_cast<unsigned long long>(guestBytes), descriptor.width, descriptor.height, descriptor.mipCount, keys != uploadedKeys ? "DCC keys changed" : "guest memory changed", DccKeysName(uploadedKeys), DccKeysName(keys), originalValid ? 1 : 0, dirty ? 1 : 0);
@@ -1150,7 +1200,11 @@ bool StorageTexture::Refresh() {
     // them instead of being dropped and re-read from stale guest bytes; a stamped one takes the
     // drop rule. Debug aid: APS5_KEYFLIP_DROP=1 drops as before.
     static const bool keyFlipDrop = std::getenv("APS5_KEYFLIP_DROP") != nullptr;
+#if !defined(NDEBUG)
     static const bool traceKeys = std::getenv("APS5_TRACE_DCC_KEYS") != nullptr;
+#else
+    static constexpr bool traceKeys = false;
+#endif
     const bool keyFlip = keysChanged && blockUnits && !keyFlipDrop && IsDccClear(uploadedKeys) && keys == DccKeys::Uncompressed && stampedBlocks.size() >= trackedLayers;
     if (traceKeys && keysChanged) {
         std::size_t pendingUnits = 0, stampedUnits = 0;
@@ -1164,7 +1218,7 @@ bool StorageTexture::Refresh() {
         if (!layerPending[layer]) continue;
         if (keyFlip && layerGeneration[layer] != 0 && stampedBlocks[layer] != GuestMemory::BlockWritten) {
             changed[layer] = false;
-            keyFlipKept.fetch_add(1, std::memory_order_relaxed);
+            AGC_DIAGNOSTIC(keyFlipKept.fetch_add(1, std::memory_order_relaxed));
             if (direct) continue;
             stored[layer] = true;
             anyStored = true;
@@ -1173,7 +1227,7 @@ bool StorageTexture::Refresh() {
         if (changed[layer]) {
             pendingResults = true;
             if (blockUnits && droppable(layer)) {
-                CaptureTrace::Log("drop-unit image=%llx unit=%u generation=%llu stamped=%d keys=%d", static_cast<unsigned long long>(descriptor.baseAddress), layer, static_cast<unsigned long long>(layerGeneration[layer]), layer < stampedBlocks.size() && stampedBlocks[layer] != 0, static_cast<int>(keys));
+                AGC_DIAGNOSTIC(CaptureTrace::Log("drop-unit image=%llx unit=%u generation=%llu stamped=%d keys=%d", static_cast<unsigned long long>(descriptor.baseAddress), layer, static_cast<unsigned long long>(layerGeneration[layer]), layer < stampedBlocks.size() && stampedBlocks[layer] != 0, static_cast<int>(keys)));
                 layerPending[layer] = false;
                 dropped = true;
                 continue;
@@ -1218,7 +1272,11 @@ namespace {
 // Debug aid (APS5_TRACE_DCC_KEYS=1): who stores uncompressed keys over a surface (recommendation
 // 2's tracer): the write-back path, the surface and its key range.
 void traceKeyStore(const char* path, const GuestTextureResource& descriptor, std::uint64_t guestBytes) {
+#if !defined(NDEBUG)
     static const bool trace = std::getenv("APS5_TRACE_DCC_KEYS") != nullptr;
+#else
+    static constexpr bool trace = false;
+#endif
     if (!trace || descriptor.dccAddress == 0) return;
     const auto packet = GuestMemory::CurrentPacket();
     std::fprintf(stderr, "[dcc-keys] uncompressed store by %s (%s) for surface 0x%llx+0x%llx: keys 0x%llx+0x%llx (packet 0x%x queue 0x%x)\n", path, flushReason != nullptr ? flushReason : "?", static_cast<unsigned long long>(descriptor.baseAddress), static_cast<unsigned long long>(guestBytes), static_cast<unsigned long long>(descriptor.dccAddress), static_cast<unsigned long long>(guestBytes / 256), packet.opcode, packet.queue);
@@ -1227,7 +1285,7 @@ void traceKeyStore(const char* path, const GuestTextureResource& descriptor, std
 }
 
 void StorageTexture::upload(const std::vector<bool>* layers) {
-    CaptureTrace::Log("upload image=%llx bytes=%llu generation=%llu reason=%s partial=%d", static_cast<unsigned long long>(descriptor.baseAddress), static_cast<unsigned long long>(guestBytes), static_cast<unsigned long long>(generation), uploadReason, layers != nullptr);
+    AGC_DIAGNOSTIC(CaptureTrace::Log("upload image=%llx bytes=%llu generation=%llu reason=%s partial=%d", static_cast<unsigned long long>(descriptor.baseAddress), static_cast<unsigned long long>(guestBytes), static_cast<unsigned long long>(generation), uploadReason, layers != nullptr));
     const bool profile = LookupOutcomes::Profiled();
     const auto start = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     const auto elementBytes = BytesPerElement(descriptor.format);
@@ -1263,7 +1321,7 @@ void StorageTexture::upload(const std::vector<bool>* layers) {
             commands = recorder->Commands();
             timing = recorder->BeginGpuTiming(Recorder::CommandClass::DccClear);
             if (auto self = weak_from_this().lock()) recorder->Keep(std::move(self));
-            ++Profile().storageRecordedClears;
+            AGC_DIAGNOSTIC(++Profile().storageRecordedClears);
             Recorder::CountBarriers(Recorder::CommandClass::DccClear, 2);
             if (Recorder::BarrierValidate()) {
                 const std::pair<VkImage, bool> cleared{image, true};
@@ -1272,7 +1330,7 @@ void StorageTexture::upload(const std::vector<bool>* layers) {
         } else {
             batch = std::make_unique<CommandBatch>(context);
             commands = batch->Handle();
-            ++Profile().storageWaitedClears;
+            AGC_DIAGNOSTIC(++Profile().storageWaitedClears);
         }
         VkImageMemoryBarrier toClear{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
         toClear.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -1320,10 +1378,10 @@ void StorageTexture::upload(const std::vector<bool>* layers) {
             const auto uploadedBytes = uploadWindows(*import, runs, layers == nullptr && version == 0);
             countStorageUpload(1, uploadedBytes);
             if (layers != nullptr) {
-                partialUploads.fetch_add(1, std::memory_order_relaxed);
-                partialUploadBytes.fetch_add(uploadedBytes, std::memory_order_relaxed);
+                AGC_DIAGNOSTIC(partialUploads.fetch_add(1, std::memory_order_relaxed));
+                AGC_DIAGNOSTIC(partialUploadBytes.fetch_add(uploadedBytes, std::memory_order_relaxed));
             }
-            ++Profile().storageDirectUploads;
+            AGC_DIAGNOSTIC(++Profile().storageDirectUploads);
             ++version;
             if (profile) LookupOutcomes::Add(LookupOutcomes::UploadDirect, start);
             return;
@@ -1394,7 +1452,7 @@ void StorageTexture::upload(const std::vector<bool>* layers) {
         if (batch) batch->SubmitAndWait();
         else recorder->EndGpuTiming(timing, uploadedBytes);
         countStorageUpload(1, uploadedBytes);
-        ++Profile().storageDirectUploads;
+        AGC_DIAGNOSTIC(++Profile().storageDirectUploads);
         ++version;
         if (profile) LookupOutcomes::Add(LookupOutcomes::UploadDirect, start);
         return;
@@ -1834,8 +1892,8 @@ std::uint64_t StorageTexture::writeBackWindows(const HostImport& import, std::sp
         // shadowed ones reach it through a publish, which notes its own.
         if (!imported.empty()) recorder->NotePendingWrites(imported);
     }
-    partialWriteBacks.fetch_add(1, std::memory_order_relaxed);
-    partialWriteBackBytes.fetch_add(storedBytes, std::memory_order_relaxed);
+    AGC_DIAGNOSTIC(partialWriteBacks.fetch_add(1, std::memory_order_relaxed));
+    AGC_DIAGNOSTIC(partialWriteBackBytes.fetch_add(storedBytes, std::memory_order_relaxed));
     return storedBytes;
 }
 
@@ -1874,7 +1932,7 @@ void StorageTexture::refreshGeneration() {
 }
 
 void StorageTexture::markLayersPending(std::uint32_t first, std::uint32_t count) {
-    CaptureTrace::Log("image-write image=%llx first=%u count=%u generation=%llu", static_cast<unsigned long long>(descriptor.baseAddress), first, count, static_cast<unsigned long long>(generation));
+    AGC_DIAGNOSTIC(CaptureTrace::Log("image-write image=%llx first=%u count=%u generation=%llu", static_cast<unsigned long long>(descriptor.baseAddress), first, count, static_cast<unsigned long long>(generation)));
     static const bool eager = std::getenv("APS5_EAGER_WRITEBACK") != nullptr || std::getenv("APS5_NO_TEXTURE_CACHE") != nullptr;
     for (std::uint32_t layer = first; layer < first + count; ++layer) layerPending[layer] = true;
     // Results of this image now cover the alias's results borrowed into these units: this image
@@ -1887,7 +1945,7 @@ void StorageTexture::markLayersPending(std::uint32_t first, std::uint32_t count)
             borrowedUnits[unit] = false;
             if (source->version != borrowedVersion || !source->layerPending[unit]) continue;
             source->layerPending[unit] = false;
-            unitsSuperseded.fetch_add(1, std::memory_order_relaxed);
+            AGC_DIAGNOSTIC(unitsSuperseded.fetch_add(1, std::memory_order_relaxed));
             superseded = true;
         }
         if (superseded) source->reconcilePending();
@@ -1976,15 +2034,17 @@ bool StorageTexture::FlushPending(std::uint64_t address, std::size_t bytes, cons
             auto* texture = *it;
             if (texture != except && texture != refreshing && texture->overlaps(address, bytes)) {
                 if (!texture->pendingUnitInside(address, bytes)) {
-                    pretestSkipped.fetch_add(1, std::memory_order_relaxed);
+                    AGC_DIAGNOSTIC(pretestSkipped.fetch_add(1, std::memory_order_relaxed));
                     ++it;
                     continue;
                 }
                 texture->dirty = false;
+#if !defined(NDEBUG)
                 if (const auto skips = texture->hookSkips.exchange(0, std::memory_order_relaxed); skips != 0 && texture->skippedResultsInside(address, bytes)) {
-                    flushedAfterSkip.fetch_add(1, std::memory_order_relaxed);
-                    if (PublishReasonFor(reason) == PublishReason::Hook && texture->hookSkipSite.load(std::memory_order_relaxed) == static_cast<std::uint8_t>(GuestMemory::CurrentReadSite())) flushedAfterSkipSameSite.fetch_add(1, std::memory_order_relaxed);
+                    AGC_DIAGNOSTIC(flushedAfterSkip.fetch_add(1, std::memory_order_relaxed));
+                    if (PublishReasonFor(reason) == PublishReason::Hook && texture->hookSkipSite.load(std::memory_order_relaxed) == static_cast<std::uint8_t>(GuestMemory::CurrentReadSite())) AGC_DIAGNOSTIC(flushedAfterSkipSameSite.fetch_add(1, std::memory_order_relaxed));
                 }
+#endif
                 if (auto alive = texture->weak_from_this().lock()) flush.push_back(std::move(alive));
                 it = pending.textures.erase(it);
             } else {
@@ -2012,7 +2072,11 @@ bool StorageTexture::FlushPending(std::uint64_t address, std::size_t bytes, cons
         }
     } unregister{flush};
     // Debug aid: APS5_TRACE_FLUSH names what forces pending results to guest memory.
+#if !defined(NDEBUG)
     static const bool trace = std::getenv("APS5_TRACE_FLUSH") != nullptr;
+#else
+    static constexpr bool trace = false;
+#endif
     if (trace) {
         for (const auto& texture : flush) std::fprintf(stderr, "[flush] image 0x%llx+0x%llx for %s 0x%llx+0x%zx\n", static_cast<unsigned long long>(texture->descriptor.baseAddress), static_cast<unsigned long long>(texture->guestBytes), reason, static_cast<unsigned long long>(address), bytes);
     }
@@ -2170,8 +2234,8 @@ bool StorageTexture::AccessKeptByCpu(std::uint64_t address, std::size_t bytes, s
     std::size_t dropped = 0;
     for (const auto& texture : overlapping) {
         if (texture->evictStale(address, bytes, dropped)) continue;
-        texture->hookSkips.fetch_add(1, std::memory_order_relaxed);
-        texture->hookSkipSite.store(site, std::memory_order_relaxed);
+        AGC_DIAGNOSTIC(texture->hookSkips.fetch_add(1, std::memory_order_relaxed));
+        AGC_DIAGNOSTIC(texture->hookSkipSite.store(site, std::memory_order_relaxed));
         for (std::uint32_t layer = 0; layer < texture->trackedLayers; ++layer) {
             if (!texture->layerPending[layer] || address >= texture->layerBegin(layer) + texture->layerBytes(layer) || texture->layerBegin(layer) >= address + bytes) continue;
             texture->hookSkipLayer = layer;
@@ -2233,7 +2297,7 @@ bool StorageTexture::evictStale(std::uint64_t address, std::size_t bytes, std::s
     originalValid = false;
     if (!anyLayerPending()) {
         ++dropped;
-        staleEvicted.fetch_add(1, std::memory_order_relaxed);
+        AGC_DIAGNOSTIC(staleEvicted.fetch_add(1, std::memory_order_relaxed));
     }
     reconcilePending();
     return true;
@@ -2301,7 +2365,7 @@ std::size_t StorageTexture::DiscardPendingInside(std::uint64_t address, std::siz
                 const auto unitBegin = texture->layerBegin(unit);
                 if (!texture->layerPending[unit] || unitBegin < address || unitBegin + texture->layerBytes(unit) > end) continue;
                 texture->layerPending[unit] = false;
-                unitsDropped.fetch_add(1, std::memory_order_relaxed);
+                AGC_DIAGNOSTIC(unitsDropped.fetch_add(1, std::memory_order_relaxed));
                 dropped = true;
             }
             if (dropped) {
@@ -2387,7 +2451,11 @@ StorageTexture::FillCoverage StorageTexture::ClassifyFill(std::uint64_t address,
     // Debug aid: APS5_TRACE_FILL_COVER=1 prints the first fills that meet images without covering
     // one of them (or a layer of one), with the images' surfaces, so a wider conversion can be
     // designed from them.
+#if !defined(NDEBUG)
     static const bool trace = std::getenv("APS5_TRACE_FILL_COVER") != nullptr;
+#else
+    static constexpr bool trace = false;
+#endif
     static int traced = 0;
     const auto cover = coverage.cover;
     if (trace && (cover == FillCover::Inside || cover == FillCover::Around || cover == FillCover::Straddle || cover == FillCover::Several) && traced < 96) {
@@ -2415,7 +2483,11 @@ std::size_t StorageTexture::NoteKeysFill(std::uint64_t address, std::size_t byte
         default: return 0;
     }
     constexpr std::uint64_t keyBytes = 256;
+#if !defined(NDEBUG)
     static const bool traceKeys = std::getenv("APS5_TRACE_DCC_KEYS") != nullptr;
+#else
+    static constexpr bool traceKeys = false;
+#endif
     auto& live = Live();
     std::lock_guard lock(live.mutex);
     std::size_t covered = 0;
@@ -2460,7 +2532,11 @@ std::size_t StorageTexture::ClearByKeysFill(std::uint64_t address, std::size_t b
 }
 
 bool StorageTexture::clearByKeysFill(DccKeys keys, std::uint8_t key) {
+#if !defined(NDEBUG)
     static const bool traceKeys = std::getenv("APS5_TRACE_DCC_KEYS") != nullptr;
+#else
+    static constexpr bool traceKeys = false;
+#endif
     VkClearColorValue clearValue{};
     auto* recorder = Recorder::Active();
     const char* refusal = !ClearColorFor(storageFormat, keys, clearValue) ? (keys == DccKeys::ClearRegister ? "clear-register code" : "no clear value in the storage format") : recorder == nullptr ? "no recorder" : nullptr;
@@ -2523,7 +2599,11 @@ bool StorageTexture::clearByKeysFill(DccKeys keys, std::uint8_t key) {
 bool StorageTexture::FillClear(std::span<const std::uint32_t, 4> pattern, std::uint32_t layer, const char*& refusal) {
     // Debug aid (APS5_TRACE_FILL_COVER=1): the first layer covers refused, with the surface, the
     // pattern and the generation the refusal was memoized at (ClassifyFill's layerRefusedGeneration).
+#if !defined(NDEBUG)
     static const bool trace = std::getenv("APS5_TRACE_FILL_COVER") != nullptr;
+#else
+    static constexpr bool trace = false;
+#endif
     struct TraceLayerRefusal {
         const StorageTexture& texture;
         std::span<const std::uint32_t, 4> pattern;
@@ -2826,7 +2906,11 @@ std::vector<StorageTexture::Adjacent> StorageTexture::adjacentPendingUnchanged(s
 }
 
 void StorageTexture::advanceAdjacent(const std::vector<Adjacent>& adjacent, std::uint64_t now, std::uint64_t firstBlock, std::uint64_t lastBlock) {
+#if !defined(NDEBUG)
     static const bool trace = std::getenv("APS5_TRACE_FLUSH") != nullptr;
+#else
+    static constexpr bool trace = false;
+#endif
     constexpr std::uint64_t block = 65536;
     for (const auto& [texture, layer, seen] : adjacent) {
         // A layer stored or refreshed meanwhile set its own generation (an old one on purpose when
@@ -2992,15 +3076,19 @@ void StorageTexture::writeBack(std::uint64_t address, std::size_t bytes) {
         if (present < storeWholeUntil || ++partialStores > pieces) {
             storeWholeUntil = present + window;
             layers = layerPending;
-            coalescedWriteBacks.fetch_add(1, std::memory_order_relaxed);
+            AGC_DIAGNOSTIC(coalescedWriteBacks.fetch_add(1, std::memory_order_relaxed));
         }
     }
     writeBackLayers(layers);
 }
 
 void StorageTexture::writeBackLayers(const std::vector<bool>& layers) {
-    CaptureTrace::Log("writeback image=%llx generation=%llu reason=%s units=%zu", static_cast<unsigned long long>(descriptor.baseAddress), static_cast<unsigned long long>(generation), flushReason, static_cast<std::size_t>(std::count(layers.begin(), layers.end(), true)));
+    AGC_DIAGNOSTIC(CaptureTrace::Log("writeback image=%llx generation=%llu reason=%s units=%zu", static_cast<unsigned long long>(descriptor.baseAddress), static_cast<unsigned long long>(generation), flushReason, static_cast<std::size_t>(std::count(layers.begin(), layers.end(), true))));
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     PhaseTimer timer;
     struct Account {
         bool enabled;
@@ -3068,7 +3156,11 @@ void StorageTexture::writeBackLayers(const std::vector<bool>& layers) {
         }
     }
     // Debug aid: APS5_TRACE_FLUSH also names the blocks a write-back leaves to the CPU.
+#if !defined(NDEBUG)
     static const bool traceKept = std::getenv("APS5_TRACE_FLUSH") != nullptr;
+#else
+    static constexpr bool traceKept = false;
+#endif
     if (traceKept && skippedAny) {
         const auto first = keep.empty() ? descriptor.baseAddress + guestBytes : keep.front().first;
         std::fprintf(stderr, "[flush] image 0x%llx+0x%llx keeps %zu CPU-written 64 KiB blocks (first stored byte at +0x%llx, %zu ranges stored, generation %llu)\n", static_cast<unsigned long long>(descriptor.baseAddress), static_cast<unsigned long long>(guestBytes), skipped, static_cast<unsigned long long>(first - descriptor.baseAddress), keep.size(), static_cast<unsigned long long>(generation));
@@ -3108,7 +3200,7 @@ void StorageTexture::writeBackLayers(const std::vector<bool>& layers) {
         // Every selected block was written by the CPU since the layer's generation: nothing to
         // store, the keys stay as they are, and the image is stale there (re-uploaded at its next
         // use, never from a matching `original`).
-        emptyWriteBacks.fetch_add(1, std::memory_order_relaxed);
+        AGC_DIAGNOSTIC(emptyWriteBacks.fetch_add(1, std::memory_order_relaxed));
         originalValid = false;
         settle(true);
         return;
@@ -3126,7 +3218,7 @@ void StorageTexture::writeBackLayers(const std::vector<bool>& layers) {
             uploadedKeys = DccKeys::Uncompressed;
             for (const auto& [from, to] : keep) GuestMemory::MarkWritten(from, static_cast<std::size_t>(to - from));
             settle(true);
-            ++Profile().storageDirectWriteBacks;
+            AGC_DIAGNOSTIC(++Profile().storageDirectWriteBacks);
             return;
         }
         // The whole-layer copies below overwrite the interior units of the span; the edge units
@@ -3224,7 +3316,7 @@ void StorageTexture::writeBackLayers(const std::vector<bool>& layers) {
         // newer than this value when its own range is collected. No CPU wrote the pages here
         // (MarkWritten made the only stamps), so the memoized collect is exact.
         settle(true);
-        ++Profile().storageDirectWriteBacks;
+        AGC_DIAGNOSTIC(++Profile().storageDirectWriteBacks);
         return;
     }
     // A surface whose memory is no longer registered (freed, or re-registered under another
@@ -3235,7 +3327,7 @@ void StorageTexture::writeBackLayers(const std::vector<bool>& layers) {
     if (unregisteredDrop && !RegisteredReadableCovers(descriptor.baseAddress, static_cast<std::size_t>(guestBytes))) {
         static std::atomic<int> reports{0};
         if (reports.fetch_add(1) < 4) std::fprintf(stderr, "[gpu] storage image 0x%llx+0x%llx: memory no longer registered; %zu pending ranges dropped\n", static_cast<unsigned long long>(descriptor.baseAddress), static_cast<unsigned long long>(guestBytes), keep.size());
-        unregisteredDropped.fetch_add(1, std::memory_order_relaxed);
+        AGC_DIAGNOSTIC(unregisteredDropped.fetch_add(1, std::memory_order_relaxed));
         originalValid = false;
         for (std::uint32_t layer = 0; layer < trackedLayers; ++layer) {
             if (layers[layer]) layerPending[layer] = false;
@@ -3281,7 +3373,11 @@ void StorageTexture::writeBackLayers(const std::vector<bool>& layers) {
     }
     // Debug aid: APS5_DUMP_STORAGE=<hex address> saves that storage image's first mip after each of
     // its first 8 write-backs as storage_<address>_<n>.raw (u32 width, height, VkFormat, then rows).
+#if !defined(NDEBUG)
     static const std::uint64_t dumpAddress = [] { const char* text = std::getenv("APS5_DUMP_STORAGE"); return text ? std::strtoull(text, nullptr, 16) : 0ull; }();
+#else
+    static const std::uint64_t dumpAddress = {};
+#endif
     static int dumps = 0;
     std::unique_ptr<Buffer> dump;
     if (dumpAddress != 0 && descriptor.baseAddress == dumpAddress && dumps < 8) {
@@ -3380,3 +3476,5 @@ VkImageView StorageTexture::View() const {
 }
 
 }
+
+#undef AGC_DIAGNOSTIC

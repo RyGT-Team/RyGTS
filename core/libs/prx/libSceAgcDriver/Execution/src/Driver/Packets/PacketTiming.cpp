@@ -6,6 +6,7 @@
 namespace AgcDriver::DriverDetail {
 
 PacketTimer::~PacketTimer() {
+#if !defined(NDEBUG)
     if (!enabled) return;
     const auto now = std::chrono::steady_clock::now();
     auto& entry = profile.byOpcode[key];
@@ -50,6 +51,7 @@ PacketTimer::~PacketTimer() {
     profile.submissions = 0;
     profile.flushMs = 0;
     profile.dispatchOutcomes = {};
+#endif
 }
 
 }

@@ -390,10 +390,22 @@ public:
     // queries around each timed range; the totals per key are reported every 10 s. Begin returns the
     // range index to pass to End, or NoTiming when timing is off or the batch's queries are used up.
     static constexpr std::uint32_t NoTiming = 0xffffffffu;
+#if !defined(NDEBUG)
     static bool GpuTimingEnabled();
+#else
+    static constexpr bool GpuTimingEnabled() noexcept { return false; }
+#endif
+#if !defined(NDEBUG)
     std::uint32_t BeginGpuTiming(std::uint64_t key);
+#else
+    constexpr std::uint32_t BeginGpuTiming(std::uint64_t) noexcept { return NoTiming; }
+#endif
     // `bytes`: what the range moved (a fill's, a copy's), summed per key on the [gputime] line.
+#if !defined(NDEBUG)
     void EndGpuTiming(std::uint32_t index, std::uint64_t bytes = 0);
+#else
+    constexpr void EndGpuTiming(std::uint32_t, std::uint64_t = 0) noexcept {}
+#endif
     // The key of the whole-batch range (first to last command; reported as "batch" on the [gputime]
     // line, apart from the per-program totals).
     static constexpr std::uint64_t BatchTimingKey = 0x3;
@@ -406,12 +418,20 @@ public:
     enum class CommandClass : std::uint8_t { DispatchLeading = 0, DispatchTrailing, IndirectArguments, LabelRun, Fill, FillClear, Copy, StagingIn, StagingOut, Draw, StorageUpload, StorageWriteBack, DccClear, DccKeyStore, PresentBlit, ShadowPublish, TemplateDataRefresh, Count };
     static constexpr std::uint64_t ClassKey(CommandClass which) { return 0x10 + static_cast<std::uint64_t>(which); }
     std::uint32_t BeginGpuTiming(CommandClass which) { return BeginGpuTiming(ClassKey(which)); }
+#if !defined(NDEBUG)
     static void CountBarriers(CommandClass which, std::uint32_t count = 1);
+#else
+    static constexpr void CountBarriers(CommandClass, std::uint32_t = 1) noexcept {}
+#endif
     // A leading barrier a command left out because the previous trailing barrier covered its
     // accesses (see Commands), on the [barriers] line as 'merged'. Debug aid: APS5_FULL_BARRIERS=1
     // (or APS5_NO_BARRIER_ELISION=1) records every leading barrier, as before.
     static bool MergeBarriers();
+#if !defined(NDEBUG)
     static void CountMerged(CommandClass which);
+#else
+    static constexpr void CountMerged(CommandClass) noexcept {}
+#endif
     // Hazard tracker, counting mode (APS5_BARRIER_VALIDATE=1): every command tells the tracker
     // what it reads and writes (guest ranges through host imports, images) with its stage before
     // it is recorded; the tracker simulates barriers emitted only on a hazard against the accesses
@@ -428,11 +448,23 @@ public:
         VkPipelineStageFlags stages;
         bool conservative = false;
     };
+#if !defined(NDEBUG)
     static bool BarrierValidate();
+#else
+    static constexpr bool BarrierValidate() noexcept { return false; }
+#endif
+#if !defined(NDEBUG)
     void NoteAccess(CommandClass which, const Access& access);
+#else
+    constexpr void NoteAccess(CommandClass, const Access&) noexcept {}
+#endif
     // A range timed outside the recorder's batches (the presenter's blit, stamped into its own
     // pool and read after its fence): enters the class totals like a recorded one.
+#if !defined(NDEBUG)
     static void AddGpuTiming(CommandClass which, double nanoseconds, std::uint64_t bytes);
+#else
+    static constexpr void AddGpuTiming(CommandClass, double, std::uint64_t) noexcept {}
+#endif
     // Presentations, so the [gputime] class totals can be given per present.
     static void CountPresent();
     // Presentations so far (never reset): a frame clock for policies that count per frame, such as

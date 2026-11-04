@@ -6,12 +6,21 @@
 namespace AgcDriver::DriverDetail {
 
 void Driver::countIndirect(int path, double readMs) {
+#if !defined(NDEBUG)
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     if (!profile || path < 0 || path >= IndirectPaths) return;
     static std::mutex countsMutex;
     static std::uint64_t counts[IndirectPaths] = {};
     static double readWaitedMs = 0;
+#if !defined(NDEBUG)
     static auto lastReport = std::chrono::steady_clock::now();
+#else
+    static std::chrono::steady_clock::time_point lastReport{};
+#endif
     std::lock_guard lock(countsMutex);
     ++counts[path];
     readWaitedMs += readMs;
@@ -21,6 +30,9 @@ void Driver::countIndirect(int path, double readMs) {
     std::uint64_t cpu = 0;
     for (int i = 1; i < IndirectPaths; ++i) cpu += counts[i];
     std::fprintf(stderr, "[indirect] gpu-side %llu, cpu-side %llu (thread dimensions %llu, fill kernel %llu, pending image results %llu, pending label or copied write %llu, not imported %llu, misaligned %llu, disabled %llu); CPU argument reads took %.1f s\n", static_cast<unsigned long long>(counts[IndirectGpu]), static_cast<unsigned long long>(cpu), static_cast<unsigned long long>(counts[IndirectThreadDimensions]), static_cast<unsigned long long>(counts[IndirectFillKernel]), static_cast<unsigned long long>(counts[IndirectPendingImage]), static_cast<unsigned long long>(counts[IndirectCopiedWrite]), static_cast<unsigned long long>(counts[IndirectNotImported]), static_cast<unsigned long long>(counts[IndirectMisaligned]), static_cast<unsigned long long>(counts[IndirectDisabled]), readWaitedMs / 1000);
+#else
+
+#endif
 }
 
 void Driver::dispatchIndirect(QueueState& queue, std::span<const std::uint32_t> packet, const Submission& submission) {
@@ -33,7 +45,11 @@ void Driver::dispatchIndirect(QueueState& queue, std::span<const std::uint32_t> 
     else if (arguments % 4 != 0) path = IndirectMisaligned;
     if (path != IndirectGpu) {
         recordQueuedLabelsBeforeRead(submission.queue);
+#if !defined(NDEBUG)
         const auto readStart = std::chrono::steady_clock::now();
+#else
+        const std::chrono::steady_clock::time_point readStart{};
+#endif
         const auto direct = Pm4::ReadDispatchArguments(arguments, initiator);
         countIndirect(path, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - readStart).count());
         dispatch(queue, direct, submission);

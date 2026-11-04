@@ -6,11 +6,21 @@
 #include "Optimization/ResourceProgram.hpp"
 #include <cstdlib>
 
+#if !defined(NDEBUG)
+#define AGC_DIAGNOSTIC(...) __VA_ARGS__
+#else
+#define AGC_DIAGNOSTIC(...) ((void)0)
+#endif
+
 namespace AgcDriver::DriverDetail {
 
 DrawVerdict Driver::draw(QueueState& queue, std::span<const std::uint32_t> packet, const Submission& submission, std::string& rejected) {
     PerformanceTimer timing("Driver.Draw");
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     std::array<double, DrawDriverPhaseCount> phaseMs{};
     std::uint64_t captures = 0;
     auto phaseLap = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
@@ -34,9 +44,17 @@ DrawVerdict Driver::draw(QueueState& queue, std::span<const std::uint32_t> packe
     using Stage = ShaderRecompiler::ShaderStage;
     using Role = ShaderRecompiler::ProgramRole;
 
+#if !defined(NDEBUG)
     static const std::uint64_t dumpTarget = [] { const char* text = std::getenv("APS5_DUMP_DRAW_SHADERS"); return text ? std::strtoull(text, nullptr, 16) : 0ull; }();
+#else
+    static const std::uint64_t dumpTarget = {};
+#endif
 
+#if !defined(NDEBUG)
     static const std::uint64_t dumpSlot1 = [] { const char* text = std::getenv("APS5_DUMP_DRAW_SLOT1"); return text ? std::strtoull(text, nullptr, 16) : 0ull; }();
+#else
+    static const std::uint64_t dumpSlot1 = {};
+#endif
 
     static const bool lockedPrepare = std::getenv("APS5_LOCKED_DRAW_PREPARE") != nullptr;
     std::unique_lock gpuLock(GuestMemory::GpuMutex(), std::defer_lock);
@@ -289,11 +307,15 @@ DrawVerdict Driver::draw(QueueState& queue, std::span<const std::uint32_t> packe
             }
         }
         recordQueuedLabelsBeforeRead(submission.queue);
+#if !defined(NDEBUG)
         const auto readStart = std::chrono::steady_clock::now();
+#else
+        const std::chrono::steady_clock::time_point readStart{};
+#endif
         const auto count = std::min(indirect.countIndirect ? Pm4::ReadDrawCount(indirect) : indirect.count, indirect.count);
         std::vector<Pm4::DrawArguments> records;
         for (std::uint32_t record = 0; record < count; ++record) records.push_back(Pm4::ReadDrawArguments(indirect, record));
-        Graphics::CountIndirectDraw(*indirectCpu, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - readStart).count());
+        AGC_DIAGNOSTIC(Graphics::CountIndirectDraw(*indirectCpu, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - readStart).count()));
         const auto baseVertexWord = locate(indirect.baseVertexLocation);
         const auto startInstanceWord = locate(indirect.startInstanceLocation);
         const auto drawIndexWord = indirect.drawIndexEnabled ? locate(indirect.drawIndexLocation) : std::nullopt;
@@ -386,3 +408,5 @@ DrawVerdict Driver::draw(QueueState& queue, std::span<const std::uint32_t> packe
 }
 
 }
+
+#undef AGC_DIAGNOSTIC

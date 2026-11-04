@@ -28,6 +28,7 @@ extern "C" {
 // RYGT_DIAG=1: blocking waits, sleeps, contended mutexes and file reads are timed for the renderer's
 // stutter diagnostics (libSceVideoOut.prx's RyGtDiagRecordNs). Zones as in shadGT's ryty_diag.h.
 enum class KernelDiagZone : std::uint32_t { Equeue = 50, Sema = 51, EventFlag = 52, Mutex = 53, Cond = 54, Sleep = 55, FileRead = 56, CondWoken = 57, EqueueWoken = 58 };
+#if !defined(NDEBUG)
 bool KernelDiagEnabled();
 void KernelDiagRecord(KernelDiagZone zone, std::uint64_t nanos, const void* caller);
 /// A mark with a raw argument (CondWoken: signalling thread id << 32 | its call site's offset in
@@ -36,8 +37,16 @@ void KernelDiagMark(KernelDiagZone zone, std::uint64_t arg);
 /// The calling thread's id and a call site as an offset in the executable, packed for CondWoken.
 std::uint64_t KernelDiagWaker(const void* caller);
 
+#else
+inline constexpr bool KernelDiagEnabled() noexcept { return false; }
+inline void KernelDiagRecord(KernelDiagZone, std::uint64_t, const void*) noexcept {}
+inline void KernelDiagMark(KernelDiagZone, std::uint64_t) noexcept {}
+inline std::uint64_t KernelDiagWaker(const void*) noexcept { return 0; }
+#endif
+
 class KernelDiagScope {
 public:
+#if !defined(NDEBUG)
     KernelDiagScope(KernelDiagZone zone, const void* caller) : m_zone(zone), m_caller(caller) {
         if (KernelDiagEnabled()) m_start = std::chrono::steady_clock::now();
     }
@@ -52,6 +61,9 @@ private:
     KernelDiagZone m_zone;
     const void* m_caller;
     std::chrono::steady_clock::time_point m_start{};
+#else
+    constexpr KernelDiagScope(KernelDiagZone, const void*) noexcept {}
+#endif
 };
 
 #endif

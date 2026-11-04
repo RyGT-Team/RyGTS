@@ -99,7 +99,11 @@ std::uint64_t Driver::writeEvidenceMaxBytes() {
 }
 
 bool Driver::traceCapSync() {
+#if !defined(NDEBUG)
     static const bool trace = std::getenv("APS5_TRACE_CAPSYNC") != nullptr;
+#else
+    static constexpr bool trace = false;
+#endif
     return trace;
 }
 

@@ -402,7 +402,11 @@ struct PipelineStore {
     std::uint64_t misses = 0;
     std::uint64_t uncached = 0;
     std::uint64_t evicted = 0;
+#if !defined(NDEBUG)
     std::chrono::steady_clock::time_point lastReport = std::chrono::steady_clock::now();
+#else
+    std::chrono::steady_clock::time_point lastReport{};
+#endif
 };
 
 // Never destroyed: the pipelines belong to a device that may already be gone when statics die, and
@@ -428,7 +432,11 @@ std::list<PipelineStore::Entry>::iterator abandon(PipelineStore& store, std::lis
 }
 
 void reportPipelines(PipelineStore& store) {
+#if !defined(NDEBUG)
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+#else
+    static constexpr bool profile = false;
+#endif
     if (!profile) return;
     const auto now = std::chrono::steady_clock::now();
     if (now - store.lastReport < std::chrono::seconds(10)) return;

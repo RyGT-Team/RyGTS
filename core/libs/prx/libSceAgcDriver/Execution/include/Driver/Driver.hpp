@@ -262,7 +262,11 @@ private:
 
     std::mutex driverPhasesMutex;
     std::array<DriverPhaseTotals, DispatchClassCount> driverPhaseTotals{};
+#if !defined(NDEBUG)
     std::chrono::steady_clock::time_point driverPhasesReport = std::chrono::steady_clock::now();
+#else
+    std::chrono::steady_clock::time_point driverPhasesReport{};
+#endif
 
     std::mutex drawPhasesMutex;
     DrawPhaseTotals drawPhaseTotals;
