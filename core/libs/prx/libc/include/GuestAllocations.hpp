@@ -71,6 +71,18 @@ private:
     void* handle;
 };
 
+void* GuestAllocationsSnapshotGuardBegin(const void* pointer, std::size_t bytes);
+void GuestAllocationsSnapshotGuardEnd(void* token) noexcept;
+class SnapshotPinGuard {
+public:
+    SnapshotPinGuard(const void* pointer, std::size_t bytes) : token(GuestAllocationsSnapshotGuardBegin(pointer, bytes)) {}
+    ~SnapshotPinGuard() { GuestAllocationsSnapshotGuardEnd(token); }
+    SnapshotPinGuard(const SnapshotPinGuard&) = delete;
+    SnapshotPinGuard& operator=(const SnapshotPinGuard&) = delete;
+private:
+    void* token;
+};
+
 }
 
 #endif

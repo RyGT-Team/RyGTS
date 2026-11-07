@@ -177,7 +177,6 @@ public:
 
     void SetProtection(std::uintptr_t address, std::size_t bytes, DWORD protection) {
         SnapshotBacking::Mutation snapshot_mutation;
-        if (writable(protection) && bytes) SnapshotBacking::MarkUnsafe(address, bytes, 4);
         Lock lock(*this);
         for (auto it = views.lower_bound(address); it != views.end() && it->first < address + bytes; ++it) {
             it->second.protection = protection;
@@ -268,6 +267,61 @@ public:
         if (found == views.end()) return false;
         *protection = found->second.protection;
         return true;
+    }
+
+    // Apply tracking restrictions without ever widening a shared view's guest permissions.
+    int TryProtectClamped(std::uintptr_t address, std::size_t bytes, std::uint32_t requested) noexcept {
+      try {
+        if (!bytes || address > UINTPTR_MAX - bytes || (requested & ~7u) ||
+            ((requested & 2u) && !(requested & 1u))) return -1;
+        SnapshotBacking::Mutation mutation;
+        std::lock_guard lock(mutex);
+        const auto end = address + bytes;
+        bool shared = false, missing = false;
+        for (auto cursor = address; cursor < end;) {
+            const auto page = cursor & ~(pageBytes - 1);
+            const auto found = views.find(page);
+            if (found == views.end() || !found->second.section) missing = true;
+            else {
+                shared = true;
+                const DWORD logical = found->second.protection;
+                if ((logical & (PAGE_GUARD | PAGE_NOCACHE | PAGE_WRITECOMBINE)) ||
+                    ((logical & 0xffu) != PAGE_NOACCESS && (logical & 0xffu) != PAGE_READONLY &&
+                     (logical & 0xffu) != PAGE_READWRITE && (logical & 0xffu) != PAGE_EXECUTE &&
+                     (logical & 0xffu) != PAGE_EXECUTE_READ && (logical & 0xffu) != PAGE_EXECUTE_READWRITE)) return -1;
+            }
+            cursor = std::min(end, page + pageBytes);
+        }
+        if (!shared) return 0;
+        if (missing) return -1;
+        for (auto cursor = address; cursor < end;) {
+            const auto page = cursor & ~(pageBytes - 1);
+            const auto found = views.find(page);
+            if (found == views.end() || !found->second.section) return -1;
+            const DWORD logical = found->second.protection;
+            if (logical & (PAGE_GUARD | PAGE_NOCACHE | PAGE_WRITECOMBINE)) return -1;
+            unsigned allowed = 0;
+            switch (logical & 0xffu) {
+            case PAGE_NOACCESS: allowed = 0; break;
+            case PAGE_READONLY: allowed = 1; break;
+            case PAGE_READWRITE: allowed = 3; break;
+            case PAGE_EXECUTE: allowed = 4; break;
+            case PAGE_EXECUTE_READ: allowed = 5; break;
+            case PAGE_EXECUTE_READWRITE: allowed = 7; break;
+            default: return -1;
+            }
+            const auto perms = requested & allowed;
+            DWORD target = PAGE_NOACCESS;
+            if (perms & 4) target = (perms & 2) ? PAGE_EXECUTE_READWRITE : ((perms & 1) ? PAGE_EXECUTE_READ : PAGE_EXECUTE);
+            else if (perms & 2) target = PAGE_READWRITE;
+            else if (perms & 1) target = PAGE_READONLY;
+            const auto stop = std::min(end, page + pageBytes);
+            DWORD old;
+            if (!VirtualProtect(reinterpret_cast<void*>(cursor), stop - cursor, target, &old)) return -1;
+            cursor = stop;
+        }
+        return 1;
+      } catch (...) { return -1; }
     }
 
     // Nonblocking, bounded proof of a single guest virtual view of each shared page.

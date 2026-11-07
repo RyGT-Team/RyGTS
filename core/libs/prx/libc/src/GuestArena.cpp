@@ -1,5 +1,6 @@
 #include "prx/libc/include/GuestArena.hpp"
 #include "prx/libc/include/WindowsMappings.hpp"
+#include "prx/libc/include/GuestAllocations.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
@@ -170,6 +171,7 @@ void GuestArenaMarkUsed_nid_postfix(const void* pointer, std::size_t bytes) {
 }
 
 void GuestArenaRelease_nid_postfix(const void* pointer, std::size_t bytes) {
+    GuestAllocations::SnapshotPinGuard pinGuard(pointer, bytes);
     Arena::Get().Release(pointer, bytes);
 }
 
@@ -180,6 +182,7 @@ void GuestArenaRange_nid_postfix(std::uintptr_t* base, std::size_t* bytes) {
 
 #ifdef _WIN32
 void GuestArenaSetProtection_nid_postfix(std::uintptr_t address, std::size_t bytes, std::uint32_t protection) {
+    GuestAllocations::SnapshotPinGuard pinGuard(reinterpret_cast<const void*>(address), bytes);
     WindowsMappings::Get().SetProtection(address, bytes, protection);
 }
 
@@ -200,16 +203,19 @@ bool GuestArenaCollectWrites_nid_postfix(std::uintptr_t address, std::size_t byt
 }
 
 void GuestArenaCommit_nid_postfix(void* pointer, std::size_t bytes, std::uint32_t protection, std::size_t granule) {
+    GuestAllocations::SnapshotPinGuard pinGuard(pointer, bytes);
     if (!Arena::Get().Contains(pointer, bytes)) throw std::invalid_argument("commit outside the guest arena");
     WindowsMappings::Get().Commit(pointer, bytes, protection, granule, Arena::Get().WriteWatched());
 }
 
 void GuestArenaReset_nid_postfix(void* pointer, std::size_t bytes) {
+    GuestAllocations::SnapshotPinGuard pinGuard(pointer, bytes);
     if (!Arena::Get().Contains(pointer, bytes)) throw std::invalid_argument("reset outside the guest arena");
     WindowsMappings::Get().Reset(pointer, bytes);
 }
 
 void GuestArenaMap_nid_postfix(void* pointer, std::size_t bytes, void* section, std::uint64_t offset, std::uint32_t protection) {
+    GuestAllocations::SnapshotPinGuard pinGuard(pointer, bytes);
     if (!Arena::Get().Contains(pointer, bytes)) {
         char message[160];
         std::snprintf(message, sizeof(message), "shared mapping outside the guest arena: 0x%llx+0x%llx (arena 0x%llx+0x%llx)",
@@ -245,7 +251,12 @@ bool GuestArenaWriteWatched_nid_postfix() {
 #ifdef _WIN32
 // Additive, optional C ABI. No C++ object crosses the renderer/runtime boundary.
 // Versioned capability; tracking itself remains disabled unless explicitly requested.
-extern "C" std::uint32_t RytySnapshotBackingVersion() noexcept { return 1; }
+extern "C" std::uint32_t RytySnapshotBackingVersion() noexcept { return 2; }
+extern "C" int RytySnapshotProtectClamped(std::uint64_t address, std::uint64_t bytes, std::uint32_t requested) noexcept {
+    if (!SnapshotBacking::TrackingEnabled() || !SnapshotBacking::ValidRange(address, bytes) ||
+        bytes > std::numeric_limits<std::size_t>::max()) return -1;
+    return GuestArena::WindowsMappings::Get().TryProtectClamped(address, static_cast<std::size_t>(bytes), requested);
+}
 // Renderer-only: its independent pre-write and GPU ownership protocol is mandatory.
 extern "C" void* RytySnapshotMapRendererAlias(std::uint64_t address, std::uint64_t size) noexcept {
     try {
@@ -279,6 +290,16 @@ extern "C" int RytySnapshotBackingState(std::uint64_t* epoch, std::uint64_t* act
     if (state == SnapshotBacking::Invalid || (state & 0xffffu)) return 0;
     *epoch = state >> 16; *active = 0;
     return 1;
+}
+// Caller must pair every successful begin with one end after the OS protection call.
+// A failed begin leaves the protocol disabled or permanently invalid.
+extern "C" int RytySnapshotProtectionBegin() noexcept {
+    if (!SnapshotBacking::TrackingEnabled()) return 0;
+    SnapshotBacking::Change(true);
+    return SnapshotBacking::state.load(std::memory_order_acquire) != SnapshotBacking::Invalid;
+}
+extern "C" void RytySnapshotProtectionEnd() noexcept {
+    if (SnapshotBacking::TrackingEnabled()) SnapshotBacking::Change(false);
 }
 extern "C" int RytySnapshotQueryUniqueBacking(std::uint64_t address, std::uint64_t size,
                                                                     std::uint64_t* generation) noexcept {
