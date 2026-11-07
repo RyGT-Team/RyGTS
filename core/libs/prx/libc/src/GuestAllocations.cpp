@@ -53,12 +53,17 @@ void require(bool condition, const char* reason) {
 // A mutation holds the registry lock and remembers the ranges it changed, which are reported to the
 // invalidator once the generation has moved on, so a cache that observed the old state meanwhile
 // notices either way.
+struct MutationState;
+thread_local MutationState* currentMutation = nullptr;
 struct MutationState {
     SnapshotBacking::Mutation snapshot;
     std::unique_lock<std::mutex> lock;
     std::vector<std::pair<std::uintptr_t, std::size_t>> changed;
-    MutationState() : lock(registry().mutex) {}
+    MutationState* previous;
+    MutationState() : lock(registry().mutex), previous(currentMutation) { currentMutation = this; }
+    ~MutationState() { currentMutation = previous; }
 };
+static_assert(alignof(MutationState) >= 2, "snapshot guard token requires one free pointer bit");
 
 void recordChange(void* mutation, const void* pointer, std::size_t bytes) {
     if (mutation != nullptr && bytes != 0) static_cast<MutationState*>(mutation)->changed.emplace_back(reinterpret_cast<std::uintptr_t>(pointer), bytes);
@@ -94,6 +99,27 @@ void GuestAllocationsInvalidate_nid_postfix(std::uintptr_t address, std::size_t 
 
 void GuestAllocationsSetPinWaiter_nid_postfix(bool (*callback)()) {
     pinWaiter.store(callback, std::memory_order_release);
+}
+
+// The opaque handle is owned and destroyed by this module; no C++ ABI crosses the boundary.
+// A single readable releasable registry range must cover the complete request.
+extern "C" void* RytySnapshotTryPinReadable(std::uint64_t address, std::uint64_t bytes) noexcept {
+    if (!SnapshotBacking::TrackingEnabled() || !address || !bytes || bytes > UINT64_MAX - address) return nullptr;
+    try {
+        auto& state = registry();
+        std::unique_lock lock(state.mutex, std::try_to_lock);
+        if (!lock.owns_lock()) return nullptr;
+        auto it = state.ranges.upper_bound(address);
+        if (it == state.ranges.begin()) return nullptr;
+        const auto& range = *std::prev(it)->second;
+        if (!range.readable || !range.releasable || range.address > address ||
+            range.bytes > UINT64_MAX - range.address || address + bytes > range.address + range.bytes) return nullptr;
+        return new std::shared_ptr<const Range>(std::prev(it)->second);
+    } catch (...) { return nullptr; }
+}
+
+extern "C" void RytySnapshotReleasePin(void* pin) noexcept {
+    delete static_cast<std::shared_ptr<const Range>*>(pin);
 }
 
 #ifdef _WIN32
@@ -245,6 +271,25 @@ void GuestAllocationsRequireUnpinned_nid_postfix(void* mutation, const void* poi
             continue;
         }
     }
+}
+
+void* GuestAllocationsSnapshotGuardBegin(const void* pointer, std::size_t bytes) {
+    if (!SnapshotBacking::TrackingEnabled()) return nullptr;
+    auto* state = currentMutation;
+    const bool own = !state || !state->lock.owns_lock();
+    if (own) state = static_cast<MutationState*>(GuestAllocationsBegin_nid_postfix());
+    try {
+        GuestAllocationsRequireUnpinned_nid_postfix(state, pointer, bytes);
+    } catch (...) {
+        if (own) GuestAllocationsEnd_nid_postfix(state);
+        throw;
+    }
+    return reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(state) | (own ? 1u : 0u));
+}
+
+void GuestAllocationsSnapshotGuardEnd(void* token) noexcept {
+    const auto value = reinterpret_cast<std::uintptr_t>(token);
+    if (value & 1u) GuestAllocationsEnd_nid_postfix(reinterpret_cast<void*>(value & ~std::uintptr_t{1}));
 }
 
 bool GuestAllocationsOverlaps_nid_postfix(void*, const void* pointer, std::size_t bytes) {
