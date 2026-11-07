@@ -11,8 +11,12 @@
 #include "prx/libc/include/FileStream.hpp"
 #include "prx/libc/include/ApplicationHeap.hpp"
 #include "prx/libc/include/General.hpp"
+#include "prx/libc/include/NativeIoWrites.hpp"
 
 extern "C" {
+#ifdef _WIN32
+std::uint32_t RytySnapshotHostWritesLibcV1() noexcept { return 1; }
+#endif
 
 [[noreturn]] void APS5_VABI _ZSt11_Xbad_allocv_nid_postfix();
 
@@ -82,6 +86,8 @@ size_t APS5_VABI fread_nid_postfix(void* buffer, size_t size, size_t count, File
     auto* handle = GetNativeStream(stream);
     if (size == 0 || count == 0) return 0;
     if (!buffer) throw std::runtime_error("fread: null buffer");
+    if (!PrepareLibcGuestWrite(buffer, count > std::numeric_limits<std::size_t>::max() / size
+        ? std::numeric_limits<std::size_t>::max() : size * count)) { errno = EIO; return 0; }
     const auto result = std::fread(buffer, size, count, handle);
     stream->SyncStatus();
     if (std::ferror(handle)) throw std::runtime_error("fread: read failed");

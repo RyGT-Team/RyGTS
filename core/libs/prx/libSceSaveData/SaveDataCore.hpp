@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <chrono>
@@ -21,9 +22,13 @@
 #include <memory>
 #include <thread>
 #include <vector>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #include "SceTypes.hpp"
 #include "prx/libc/include/General.hpp"
+#include "prx/libc/include/NativeIoWrites.hpp"
 
 namespace savedata {
 
@@ -36,6 +41,7 @@ int APS5_VABI sceKernelCancelEventFlag(KernelEventFlag ef, std::uint64_t set_pat
 }
 
 namespace {
+
 
 constexpr std::uint32_t SD_FACILITY = 0x809F0000u;
 constexpr int sd_error(std::uint32_t code) { return static_cast<int>(SD_FACILITY + code); }
@@ -710,6 +716,7 @@ int dir_name_search_internal(const SaveDataDirNameSearchCond* cond,
         std::snprintf(result->dir_names[i].data, sizeof(result->dir_names[i].data), "%s",
                       found[i].c_str());
         if (result->params != nullptr) {
+            if (!PrepareLibcGuestWrite(&result->params[i], sizeof(result->params[i]))) return SD_ERROR_INTERNAL;
             load_save_param(save_directory(save_alias_locked(st, found[i])), &result->params[i]);
         }
         if (result->infos != nullptr) {
@@ -722,6 +729,7 @@ int dir_name_search_internal(const SaveDataDirNameSearchCond* cond,
             auto* info = reinterpret_cast<SearchInfo*>(result->infos) + i;
             std::memset(info, 0, sizeof(*info));
             const auto directory = save_directory(save_alias_locked(st, found[i]));
+            if (!PrepareLibcGuestWrite(&info->blocks, sizeof(info->blocks))) return SD_ERROR_INTERNAL;
             if (read_u64(save_blocks_path(directory), &info->blocks) == SD_OK) {
                 constexpr std::uint64_t block_size = 32768;
                 std::uint64_t used = 0;

@@ -175,6 +175,8 @@ void _readFile(const Apr::ReadFileCommand& command) {
     std::ifstream stream(file.path, std::ios::binary);
     if (!stream) throw std::runtime_error("APR: cannot open " + file.path.string());
     stream.seekg(static_cast<std::streamoff>(command.offset));
+    if (!PrepareGuestWrite(reinterpret_cast<void*>(command.destination), static_cast<std::size_t>(command.size)))
+        throw std::runtime_error("APR: guest write tracking unavailable");
     stream.read(reinterpret_cast<char*>(command.destination), static_cast<std::streamsize>(command.size));
     if (stream.bad()) throw std::runtime_error("APR: read failed for " + file.path.string());
 }

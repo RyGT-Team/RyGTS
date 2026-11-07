@@ -4,6 +4,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <stdexcept>
+extern "C" int RytySnapshotBackingState(std::uint64_t*, std::uint64_t*) noexcept;
+extern "C" void RytySnapshotMarkUnsafe(std::uint64_t, std::uint64_t) noexcept;
+extern "C" int RytySnapshotRangeSafe(std::uint64_t, std::uint64_t) noexcept;
 
 namespace {
 void Require(bool ok, const char* message) {
@@ -25,6 +28,15 @@ int main() {
     constexpr std::size_t DriverBytes = 0xc00000000ull;
     constexpr std::size_t LargeHostBytes = 0x4000000000ull;
     try {
+        if (std::getenv("RYGT_NATIVE_SNAPSHOT_LEASE")) {
+            std::uint64_t before{}, active{}, after{};
+            Require(RytySnapshotBackingState(&before, &active) != 0, "backing state unavailable");
+            RytySnapshotMarkUnsafe(SnapshotBacking::AddressLimit, 4096);
+            RytySnapshotMarkUnsafe(0, 0);
+            Require(RytySnapshotBackingState(&after, &active) != 0 && before == after, "host scratch or zero size disabled protocol");
+            RytySnapshotMarkUnsafe(SnapshotBacking::AddressLimit - 1, 2);
+            Require(!RytySnapshotRangeSafe(0x20000, 1), "cross-limit write did not fail closed");
+        }
         // An unconstrained 256 GiB AMD reservation must not occupy guest addresses.
         largeHost = VirtualAlloc(nullptr, LargeHostBytes, MEM_RESERVE, PAGE_NOACCESS);
         Require(largeHost && reinterpret_cast<std::uintptr_t>(largeHost) >= 0xfc00000000ull,
@@ -91,6 +103,22 @@ int main() {
         HANDLE section = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_EXECUTE_READWRITE, 0, 2 * Page, nullptr);
         Require(section != nullptr, "could not create guest backing");
         GuestArenaMap_nid_postfix(fixed, 2 * Page, section, 0, PAGE_READWRITE);
+        auto& proof = WindowsMappings::Get();
+        const bool supported = proof.TryUniqueShared(reinterpret_cast<std::uintptr_t>(fixed), 2 * Page);
+        if (supported) {
+            auto* second = fixed - 4 * Page;
+            GuestArenaMarkUsed_nid_postfix(second, Page);
+            HANDLE duplicate = nullptr;
+            Require(DuplicateHandle(GetCurrentProcess(), section, GetCurrentProcess(), &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS), "duplicate section handle");
+            GuestArenaMap_nid_postfix(second, Page, duplicate, 0, PAGE_READWRITE);
+            Require(!proof.TryUniqueShared(reinterpret_cast<std::uintptr_t>(fixed), Page), "duplicated-handle guest alias was accepted");
+            GuestArenaReset_nid_postfix(second, Page);
+            GuestArenaRelease_nid_postfix(second, Page);
+            CloseHandle(duplicate);
+            Require(proof.TryUniqueShared(reinterpret_cast<std::uintptr_t>(fixed), Page), "unique shared view not restored");
+        } else {
+            std::puts("SKIP: unique-backing query unavailable or bounded out");
+        }
         fixed[0] = 66;
         fixed[Page] = 77;
         auto* alias = static_cast<std::uint8_t*>(GuestArenaMapAlias_nid_postfix(reinterpret_cast<std::uintptr_t>(fixed), 2 * Page));

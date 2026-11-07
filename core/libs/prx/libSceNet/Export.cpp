@@ -2,6 +2,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <windows.h>
 #else
 #include <arpa/inet.h>
 #include <cerrno>
@@ -19,6 +20,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstddef>
 #include <cstring>
 #include <memory>
@@ -30,10 +32,12 @@
 #include <string>
 #include "SceTypes.hpp"
 #include "prx/libc/include/General.hpp"
+#include "prx/libc/include/NativeIoWrites.hpp"
 
 // Guest socket descriptors retain PS5 semantics while their transport is backed by host sockets.
 
 namespace {
+// Native receives can write to guest memory without a user-mode write fault.
 // FreeBSD errno numbers as reported through sceNetErrnoLoc (SCE_NET_ERROR_* is 0x80410100 + errno).
 constexpr int NET_ENOENT = 2;
 constexpr int NET_EBADF = 9;
@@ -234,6 +238,9 @@ std::uint32_t swap32(std::uint32_t v) {
 }  // namespace
 
 extern "C" {
+#ifdef _WIN32
+std::uint32_t RytySnapshotHostWritesSceNetV1() noexcept { return 1; }
+#endif
 
 int* APS5_VABI sceNetErrnoLoc(void) {
     return errno_slot();
@@ -442,6 +449,7 @@ int64_t APS5_VABI sceNetRecv(int s, void* buf, size_t len, int flags) {
         socket = it->second;
     }
     const int native_flags = flags == 2 ? MSG_PEEK : 0;
+    if (!PrepareLibcGuestWrite(buf, len)) return fail(5);
     const int result = ::recv(socket.native->value, static_cast<char*>(buf), static_cast<int>(len), native_flags);
     return result >= 0 ? result : fail(native_error());
 }
@@ -461,6 +469,7 @@ int64_t APS5_VABI sceNetRecvfrom(int s, void* buf, size_t len, int flags, void* 
     sockaddr_storage peer{};
     NativeLength peer_length = sizeof(peer);
     const int native_flags = flags == 2 ? MSG_PEEK : 0;
+    if (!PrepareLibcGuestWrite(buf, len)) return fail(5);
     const int result = ::recvfrom(socket.native->value, static_cast<char*>(buf), static_cast<int>(len),
         native_flags, from ? reinterpret_cast<sockaddr*>(&peer) : nullptr, from ? &peer_length : nullptr);
     if (result < 0) return fail(native_error());

@@ -11,9 +11,11 @@
 #endif
 #include "prx/libc/include/general/VabiMacros.hpp"
 #include "prx/libkernel/Socket/include/SocketRuntime.hpp"
+#include "prx/libkernel/File/include/File.hpp"
 #include <algorithm>
 #include <climits>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <new>
 #include <map>
@@ -23,6 +25,10 @@
 
 extern "C" int* APS5_VABI __error_nid_postfix();
 namespace {
+bool SnapshotLeaseIoEnabled() noexcept {
+    static const bool enabled = [] { const char* v = std::getenv("RYGT_NATIVE_SNAPSHOT_LEASE"); return v && v[0] == '1' && v[1] == '\0'; }();
+    return enabled;
+}
 #ifdef _WIN32
 using NativeSocket = SOCKET;
 constexpr auto Invalid = INVALID_SOCKET;
@@ -284,6 +290,7 @@ std::int64_t APS5_VABI recv_nid_postfix(int descriptor, void* buffer, std::uint6
     if ((flags & ~2) != 0) return Fail(45);
     if (length > INT_MAX) return Fail(40);
     if (!buffer && length) return Fail(14);
+    if (SnapshotLeaseIoEnabled() && !PrepareGuestWrite(buffer, static_cast<std::size_t>(length))) return Fail(5);
     const auto result = ::recv(socket->value, static_cast<char*>(buffer), static_cast<int>(length),
         flags & 2 ? MSG_PEEK : 0);
     return result < 0 ? Fail(NativeError()) : result;
@@ -370,6 +377,7 @@ std::int64_t APS5_VABI recvfrom_nid_postfix(int descriptor, void* buffer, std::u
     if ((flags & ~2) != 0) return Fail(45);
     if (length > INT_MAX) return Fail(40);
     if ((!buffer && length) || (address && !addressLength)) return Fail(14);
+    if (SnapshotLeaseIoEnabled() && !PrepareGuestWrite(buffer, static_cast<std::size_t>(length))) return Fail(5);
     sockaddr_storage native{};
     socklen_t size = sizeof(native);
     const auto result = ::recvfrom(socket->value, static_cast<char*>(buffer), static_cast<int>(length),
