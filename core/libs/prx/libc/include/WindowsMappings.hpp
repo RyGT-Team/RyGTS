@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <optional>
 #include <map>
 #include <memory>
 #include <limits>
@@ -16,6 +17,7 @@
 #include <stdexcept>
 #include <string>
 #include <system_error>
+#include "prx/libc/include/SnapshotBackingState.hpp"
 
 namespace GuestArena {
 
@@ -76,6 +78,7 @@ public:
     }
 
     void Commit(void* address, std::size_t bytes, DWORD protection, std::size_t granule, bool watched) {
+        SnapshotBacking::Mutation snapshot_mutation;
         Lock lock(*this);
         requireOwned(reinterpret_cast<std::uintptr_t>(address), bytes);
         const auto end = reinterpret_cast<std::uintptr_t>(address) + bytes;
@@ -111,11 +114,13 @@ public:
     }
 
     void Reset(void* address, std::size_t bytes) {
+        SnapshotBacking::Mutation snapshot_mutation;
         Lock lock(*this);
         reset(reinterpret_cast<std::uintptr_t>(address), bytes);
     }
 
     void Map(void* address, std::size_t bytes, HANDLE section, std::uint64_t offset, DWORD protection) {
+        SnapshotBacking::Mutation snapshot_mutation;
         Lock lock(*this);
         auto cursor = reinterpret_cast<std::uintptr_t>(address);
         reset(cursor, bytes);
@@ -152,9 +157,27 @@ public:
             views.emplace(base, View{shared, protection, 0, false, owned, offset + done});
             invalidate(*shared);
         }
+        if (SnapshotBacking::TrackingEnabled()) {
+            try {
+                if (proofMaps.size() >= 65536) {
+                    proofMaps.erase(std::remove_if(proofMaps.begin(), proofMaps.end(),
+                        [](const auto& record) { return record.section.expired(); }), proofMaps.end());
+                }
+                if (proofMaps.size() >= 65536 || bytes > UINT64_MAX - offset ||
+                    bytes > UINTPTR_MAX - cursor) {
+                    SnapshotBacking::state.store(SnapshotBacking::Invalid, std::memory_order_release);
+                } else {
+                    proofMaps.push_back({owned, cursor, bytes, offset});
+                }
+            } catch (...) {
+                SnapshotBacking::state.store(SnapshotBacking::Invalid, std::memory_order_release);
+            }
+        }
     }
 
     void SetProtection(std::uintptr_t address, std::size_t bytes, DWORD protection) {
+        SnapshotBacking::Mutation snapshot_mutation;
+        if (writable(protection) && bytes) SnapshotBacking::MarkUnsafe(address, bytes);
         Lock lock(*this);
         for (auto it = views.lower_bound(address); it != views.end() && it->first < address + bytes; ++it) {
             it->second.protection = protection;
@@ -164,10 +187,12 @@ public:
     }
 
     bool HandleWrite(std::uintptr_t address) {
+        SnapshotBacking::Mutation snapshot_mutation;
         Lock lock(*this);
         const auto base = address & ~(pageBytes - 1);
         const auto found = views.find(base);
         if (found == views.end() || !writable(found->second.protection)) return false;
+        SnapshotBacking::MarkUnsafe(base, pageBytes);
         auto& view = found->second;
         invalidate(*view.page);
         DWORD previous;
@@ -200,6 +225,7 @@ public:
     }
 
     void* MapAlias(std::uintptr_t address, std::size_t bytes) {
+        SnapshotBacking::Mutation snapshot_mutation;
         Lock lock(*this);
         const auto refuse = [&](const char* reason) {
             char text[192];
@@ -228,6 +254,7 @@ public:
     }
 
     void UnmapAlias(void* alias) {
+        SnapshotBacking::Mutation snapshot_mutation;
         if (alias == nullptr) return;
         SYSTEM_INFO system{};
         GetSystemInfo(&system);
@@ -243,7 +270,44 @@ public:
         return true;
     }
 
+    // Nonblocking, bounded proof of a single guest virtual view of each shared page.
+    // Host aliases are deliberately outside this proof and need a separate writer protocol.
+    bool TryUniqueShared(std::uintptr_t address, std::size_t bytes) noexcept {
+      try {
+        if (!bytes || address > std::numeric_limits<std::uintptr_t>::max() - bytes || !compare) return false;
+        std::unique_lock lock(mutex, std::try_to_lock);
+        if (!lock.owns_lock()) return false;
+        const auto end = address + bytes;
+        auto page = address & ~(pageBytes - 1);
+        std::size_t examined = 0, budget = 0;
+        for (; page < end; page += pageBytes) {
+            if (++examined > 256) return false;
+            const auto it = views.find(page);
+            if (it == views.end() || !it->second.section) return false;
+            const DWORD prot = it->second.protection & 0xffu;
+            if (prot != PAGE_READONLY && prot != PAGE_READWRITE && prot != PAGE_EXECUTE_READ && prot != PAGE_EXECUTE_READWRITE) return false;
+            for (const auto& record : proofMaps) {
+                if (++budget > 1000000) return false;
+                const auto section = record.section.lock();
+                if (!section || it->second.offset < record.offset) continue;
+                const auto relative = it->second.offset - record.offset;
+                if (relative >= record.bytes) continue;
+                const auto otherBase = record.base + static_cast<std::uintptr_t>(relative);
+                if (otherBase == page) continue;
+                const auto other = views.find(otherBase);
+                if (other != views.end() && other->second.section == section &&
+                    other->second.offset == it->second.offset &&
+                    sameSection(section->handle, it->second.section->handle)) return false;
+            }
+            if (page > std::numeric_limits<std::uintptr_t>::max() - pageBytes) return false;
+        }
+        return true;
+      } catch (...) { return false; }
+    }
+
     bool Collect(std::uintptr_t address, std::size_t bytes, void** pages, std::size_t* count, bool clear) {
+        std::optional<SnapshotBacking::Mutation> snapshot_mutation;
+        if (clear) snapshot_mutation.emplace();
         Lock lock(*this);
         const auto capacity = *count;
         *count = 0;
@@ -319,6 +383,12 @@ private:
         std::uint64_t seen;
         bool armed;
         std::shared_ptr<Section> section;
+        std::uint64_t offset;
+    };
+    struct ProofMapRecord {
+        std::weak_ptr<Section> section;
+        std::uintptr_t base;
+        std::size_t bytes;
         std::uint64_t offset;
     };
     void forgetClean(std::uintptr_t start, std::uintptr_t end) {
@@ -566,6 +636,7 @@ private:
     std::size_t allocationGranularity = 0;
     std::map<std::uintptr_t, std::uintptr_t> cleanRanges;
     std::map<std::uintptr_t, View> views;
+    std::vector<ProofMapRecord> proofMaps;
     std::map<std::pair<std::uintptr_t, std::uint64_t>, std::weak_ptr<SharedPage>> physical;
     std::mutex mutex;
     std::atomic<DWORD> owner{0};

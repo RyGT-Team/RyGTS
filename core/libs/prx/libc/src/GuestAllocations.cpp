@@ -1,4 +1,5 @@
 #include "prx/libc/include/GuestAllocations.hpp"
+#include "prx/libc/include/SnapshotBackingState.hpp"
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -53,8 +54,10 @@ void require(bool condition, const char* reason) {
 // invalidator once the generation has moved on, so a cache that observed the old state meanwhile
 // notices either way.
 struct MutationState {
+    SnapshotBacking::Mutation snapshot;
     std::unique_lock<std::mutex> lock;
     std::vector<std::pair<std::uintptr_t, std::size_t>> changed;
+    MutationState() : lock(registry().mutex) {}
 };
 
 void recordChange(void* mutation, const void* pointer, std::size_t bytes) {
@@ -64,7 +67,7 @@ void recordChange(void* mutation, const void* pointer, std::size_t bytes) {
 }
 
 void* GuestAllocationsBegin_nid_postfix() {
-    return new MutationState{std::unique_lock<std::mutex>(registry().mutex), {}};
+    return new MutationState;
 }
 
 void GuestAllocationsEnd_nid_postfix(void* mutation) noexcept {

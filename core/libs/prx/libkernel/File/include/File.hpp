@@ -22,8 +22,9 @@ int APS5_VABI sceKernelUnlink(const char* path);
 
 // Before the host kernel writes guest memory directly (a file read into a guest buffer), lets a
 // renderer that write-protects guest pages it caches drop them; the write would otherwise fail
-// on a protected page instead of faulting.
-void PrepareGuestWrite(void* buffer, std::size_t bytes);
+// on a protected page instead of faulting. Returns false if opt-in tracking is enabled but the
+// required unsafe-range marker is unavailable; callers must not start the host write in that case.
+bool PrepareGuestWrite(void* buffer, std::size_t bytes);
 // Reads into guest memory: read(target) returns bytes read or -1. The renderer can protect the
 // buffer again (a GPU write to it) between PrepareGuestWrite and the read; Windows then fails the
 // read instead of faulting, and the error escaped as a C++ exception into the game's file thread.

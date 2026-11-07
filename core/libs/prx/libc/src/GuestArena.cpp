@@ -32,6 +32,8 @@ std::uintptr_t alignUp(std::uintptr_t value, std::size_t alignment) {
     return (value + alignment - 1) & ~(static_cast<std::uintptr_t>(alignment) - 1);
 }
 
+
+
 bool WriteWatchRequested() {
     const char* enabled = std::getenv("APS5_WRITE_WATCH");
     return std::getenv("APS5_NO_WRITE_WATCH") == nullptr && enabled && std::strcmp(enabled, "1") == 0;
@@ -222,6 +224,7 @@ void GuestArenaMap_nid_postfix(void* pointer, std::size_t bytes, void* section, 
 // range that cannot be aliased returns null.
 void* GuestArenaMapAlias_nid_postfix(std::uintptr_t address, std::size_t bytes) {
     try {
+        SnapshotBacking::MarkUnsafe(address, bytes); // unknown external writers may use the writable alias
         return WindowsMappings::Get().MapAlias(address, bytes);
     } catch (const std::exception&) {
         return nullptr;
@@ -238,3 +241,47 @@ bool GuestArenaWriteWatched_nid_postfix() {
 }
 
 }
+
+#ifdef _WIN32
+// Additive, optional C ABI. No C++ object crosses the renderer/runtime boundary.
+// Versioned capability; tracking itself remains disabled unless explicitly requested.
+extern "C" std::uint32_t RytySnapshotBackingVersion() noexcept { return 1; }
+// Renderer-only: its independent pre-write and GPU ownership protocol is mandatory.
+extern "C" void* RytySnapshotMapRendererAlias(std::uint64_t address, std::uint64_t size) noexcept {
+    try {
+        if (!SnapshotBacking::TrackingEnabled() || !SnapshotBacking::ValidRange(address, size) ||
+            size > std::numeric_limits<std::size_t>::max()) return nullptr;
+        return GuestArena::WindowsMappings::Get().MapAlias(address, static_cast<std::size_t>(size));
+    } catch (...) {
+        SnapshotBacking::state.store(SnapshotBacking::Invalid, std::memory_order_release);
+        return nullptr;
+    }
+}
+extern "C" void RytySnapshotMarkUnsafe(std::uint64_t address, std::uint64_t size) noexcept {
+    if (!size || address >= SnapshotBacking::AddressLimit) return; // host-only scratch
+    SnapshotBacking::MarkUnsafe(address, size);
+}
+extern "C" int RytySnapshotRangeSafe(std::uint64_t address, std::uint64_t size) noexcept {
+    return SnapshotBacking::RangeSafe(address, size) ? 1 : 0;
+}
+extern "C" int RytySnapshotBackingState(std::uint64_t* epoch, std::uint64_t* active) noexcept {
+    if (!SnapshotBacking::TrackingEnabled() || !epoch || !active) return 0;
+    const auto state = SnapshotBacking::state.load(std::memory_order_acquire);
+    if (state == SnapshotBacking::Invalid || (state & 0xffffu)) return 0;
+    *epoch = state >> 16; *active = 0;
+    return 1;
+}
+extern "C" int RytySnapshotQueryUniqueBacking(std::uint64_t address, std::uint64_t size,
+                                                                    std::uint64_t* generation) noexcept {
+    if (!generation || !size || size > std::numeric_limits<std::size_t>::max()) return 0;
+    std::uint64_t first{}, active{};
+    if (!RytySnapshotBackingState(&first, &active)) return 0;
+    try {
+        if (!GuestArena::WindowsMappings::Get().TryUniqueShared(address, static_cast<std::size_t>(size))) return 0;
+    } catch (...) { return 0; }
+    std::uint64_t last{};
+    if (!RytySnapshotBackingState(&last, &active) || first != last) return 0;
+    *generation = last;
+    return 1;
+}
+#endif

@@ -16,11 +16,19 @@
 #include <filesystem>
 #include <stdexcept>
 #include <string>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include "SceTypes.hpp"
 #include "prx/libc/include/General.hpp"
+#include "prx/libc/include/NativeIoWrites.hpp"
 #include "SaveData.hpp"
 
 static constexpr char SAVE_DIR[] = "_sd";
+
+#ifdef _WIN32
+extern "C" std::uint32_t RytySnapshotHostWritesSceSaveDataNativeV1() noexcept { return 1; }
+#endif
 
 static std::atomic<std::int32_t> g_transaction_counter{1};
 static bool g_initialized = false;
@@ -382,6 +390,7 @@ static int getSaveDataMemory2(SaveDataMemoryGet2* get_param) {
             return SAVE_DATA_ERROR_INTERNAL;
         }
         f.seekg(static_cast<std::streamoff>(d->offset));
+        if (!PrepareLibcGuestWrite(d->buf, d->buf_size)) return SAVE_DATA_ERROR_INTERNAL;
         f.read(static_cast<char*>(d->buf), static_cast<std::streamsize>(d->buf_size));
         if (!f) {
             return SAVE_DATA_ERROR_INTERNAL;

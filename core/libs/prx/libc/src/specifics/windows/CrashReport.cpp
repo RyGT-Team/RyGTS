@@ -17,6 +17,7 @@
 #include <mutex>
 #include "Sse4aEmulation.hpp"
 #include <io.h>
+extern "C" void RytySnapshotMarkUnsafe(std::uint64_t, std::uint64_t) noexcept;
 
 namespace {
 
@@ -120,6 +121,8 @@ thread_local std::uintptr_t t_watchFault = 0;
 thread_local char t_watchWhere[MAX_PATH + 64];
 
 void ProtectWatchPage(DWORD protection) {
+    if (protection == PAGE_READWRITE || protection == PAGE_EXECUTE_READWRITE)
+        RytySnapshotMarkUnsafe(g_watchPage, 0x1000);
     DWORD old;
     VirtualProtect(reinterpret_cast<void*>(g_watchPage), 0x1000, protection, &old);
 }
@@ -192,6 +195,7 @@ thread_local std::uint64_t t_captureDestination = 0;
 thread_local std::uint64_t t_captureSize = 0;
 
 void WriteCodeByte(std::uintptr_t address, std::uint8_t value) {
+    RytySnapshotMarkUnsafe(address, 1);
     DWORD old;
     VirtualProtect(reinterpret_cast<void*>(address), 1, PAGE_EXECUTE_READWRITE, &old);
     *reinterpret_cast<volatile std::uint8_t*>(address) = value;

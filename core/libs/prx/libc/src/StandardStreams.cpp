@@ -2,6 +2,7 @@
 #include "prx/libc/include/general/VabiMacros.hpp"
 #include <cerrno>
 #include "prx/libc/include/LogFiles.hpp"
+#include "prx/libc/include/NativeIoWrites.hpp"
 #ifdef _WIN32
 #include <io.h>
 #else
@@ -67,6 +68,7 @@ int APS5_VABI ungetc_nid_postfix(int value, FileStream* stream) {
     return result;
 }
 char* APS5_VABI fgets_nid_postfix(char* buffer, int size, FileStream* stream) {
+    if (size > 0 && !PrepareLibcGuestWrite(buffer, static_cast<std::size_t>(size))) { errno = EIO; return nullptr; }
     auto* result = std::fgets(buffer, size, GetNativeStream(stream));
     stream->SyncStatus();
     return result;

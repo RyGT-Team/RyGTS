@@ -36,6 +36,9 @@ namespace {
 }  // namespace
 
 extern "C" {
+#ifdef _WIN32
+std::uint32_t RytySnapshotHostWritesSceSaveDataV1() noexcept { return 1; }
+#endif
 
 int APS5_VABI sceSaveDataInitialize3(const void* init) {
     const int rc = savedata::initialize_internal(init);

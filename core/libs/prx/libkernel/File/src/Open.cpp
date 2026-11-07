@@ -1,6 +1,7 @@
 #include "prx/libkernel/File/include/FileFlags.hpp"
 #include "prx/libkernel/File/include/NativeStat.hpp"
 #include "prx/libc/include/General.hpp"
+#include "prx/libc/include/NativeIoWrites.hpp"
 #include "prx/libkernel/File/include/File.hpp"
 #include "prx/libkernel/File/include/DirectoryDescriptor.hpp"
 #include "prx/libkernel/KernelErrors.hpp"
@@ -11,6 +12,7 @@
 #include <atomic>
 #include <cerrno>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <vector>
@@ -97,24 +99,34 @@ static int MapFlags(int sceFlags) {
 }
 #endif
 
-void PrepareGuestWrite(void* buffer, std::size_t bytes) {
+bool PrepareGuestWrite(void* buffer, std::size_t bytes) {
+    if (!MarkNativeGuestWrite(buffer, bytes)) return false;
 #ifdef _WIN32
     using RangeFunction = void (*)(std::uint64_t, std::uint64_t);
-    static RangeFunction invalidate = nullptr;
-    if (invalidate == nullptr) {
-        if (HMODULE renderer = GetModuleHandleA("libSceVideoOut.prx")) {
-            invalidate = reinterpret_cast<RangeFunction>(reinterpret_cast<void*>(GetProcAddress(renderer, "RytyGpuInvalidateMemory")));
+    if (buffer != nullptr && bytes != 0) {
+        static std::atomic<RangeFunction> cached{nullptr};
+        auto invalidate = cached.load(std::memory_order_relaxed);
+        if (!invalidate) {
+            if (HMODULE renderer = GetModuleHandleA("libSceVideoOut.prx")) {
+                invalidate = reinterpret_cast<RangeFunction>(reinterpret_cast<void*>(GetProcAddress(renderer, "RytyGpuInvalidateMemory")));
+                if (invalidate) cached.store(invalidate, std::memory_order_relaxed);
+            }
         }
+        if (invalidate) invalidate(reinterpret_cast<std::uint64_t>(buffer), bytes);
     }
-    if (invalidate != nullptr && buffer != nullptr && bytes != 0) invalidate(reinterpret_cast<std::uint64_t>(buffer), bytes);
 #else
     (void)buffer;
     (void)bytes;
 #endif
+    return true;
 }
 
+#ifdef _WIN32
+extern "C" std::uint32_t RytySnapshotHostWritesKernelV1() noexcept { return 1; }
+#endif
+
 std::int64_t ReadIntoGuest(void* buffer, std::size_t bytes, const std::function<std::int64_t(void*)>& read) {
-    PrepareGuestWrite(buffer, bytes);
+    if (!PrepareGuestWrite(buffer, bytes)) { errno = EIO; return -1; }
     const std::int64_t n = read(buffer);
     if (n >= 0 || buffer == nullptr || bytes == 0) return n;
     const int error = errno;
