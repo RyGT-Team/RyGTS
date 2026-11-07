@@ -224,7 +224,7 @@ void GuestArenaMap_nid_postfix(void* pointer, std::size_t bytes, void* section, 
 // range that cannot be aliased returns null.
 void* GuestArenaMapAlias_nid_postfix(std::uintptr_t address, std::size_t bytes) {
     try {
-        SnapshotBacking::MarkUnsafe(address, bytes); // unknown external writers may use the writable alias
+        SnapshotBacking::MarkUnsafe(address, bytes, 1); // unknown external writers may use the writable alias
         return WindowsMappings::Get().MapAlias(address, bytes);
     } catch (const std::exception&) {
         return nullptr;
@@ -261,6 +261,15 @@ extern "C" void RytySnapshotMarkUnsafe(std::uint64_t address, std::uint64_t size
     if (!size || address >= SnapshotBacking::AddressLimit) return; // host-only scratch
     SnapshotBacking::MarkUnsafe(address, size);
 }
+#ifndef NDEBUG
+extern "C" void RytySnapshotMarkUnsafeTagged(std::uint64_t address, std::uint64_t size, std::uint32_t cause) noexcept {
+    if (!size || address >= SnapshotBacking::AddressLimit) return;
+    SnapshotBacking::MarkUnsafe(address, size, cause & 0xffu);
+}
+extern "C" std::uint32_t RytySnapshotUnsafeCauses(std::uint64_t address, std::uint64_t size) noexcept {
+    return SnapshotBacking::UnsafeCauses(address, size);
+}
+#endif
 extern "C" int RytySnapshotRangeSafe(std::uint64_t address, std::uint64_t size) noexcept {
     return SnapshotBacking::RangeSafe(address, size) ? 1 : 0;
 }
