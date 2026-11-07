@@ -177,7 +177,7 @@ public:
 
     void SetProtection(std::uintptr_t address, std::size_t bytes, DWORD protection) {
         SnapshotBacking::Mutation snapshot_mutation;
-        if (writable(protection) && bytes) SnapshotBacking::MarkUnsafe(address, bytes);
+        if (writable(protection) && bytes) SnapshotBacking::MarkUnsafe(address, bytes, 4);
         Lock lock(*this);
         for (auto it = views.lower_bound(address); it != views.end() && it->first < address + bytes; ++it) {
             it->second.protection = protection;
@@ -192,7 +192,7 @@ public:
         const auto base = address & ~(pageBytes - 1);
         const auto found = views.find(base);
         if (found == views.end() || !writable(found->second.protection)) return false;
-        SnapshotBacking::MarkUnsafe(base, pageBytes);
+        SnapshotBacking::MarkUnsafe(base, pageBytes, 2);
         auto& view = found->second;
         invalidate(*view.page);
         DWORD previous;
