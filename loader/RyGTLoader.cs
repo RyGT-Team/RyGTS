@@ -1125,6 +1125,9 @@ namespace RyGT
         readonly Button[] tabs = new Button[3];
         volatile bool busy;
         Action<bool> showGraphics;
+        DarkComboBox shaderCompileMode;
+        Label shaderCompilationAvailability;
+        bool refreshingShaderCompilationPolicy;
 
         public LoaderForm()
         {
@@ -1814,8 +1817,9 @@ namespace RyGT
             var modeRow = new FlowLayoutPanel { AutoSize = true, BackColor = Color.Transparent, Margin = new Padding(0, 4, 0, 2), WrapContents = false };
             var modeLabel = new Label { Text = "When new shaders compile", AutoSize = false, Width = 196, Height = 20, BackColor = Color.Transparent, Margin = new Padding(0, 6, 8, 0) };
             var mode = new DarkComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160, FlatStyle = FlatStyle.Flat };
+            shaderCompileMode = mode;
             mode.Items.AddRange(new object[] { "Pause the game", "Slow motion", "Keep going (objects pop in)" });
-            mode.SelectedIndex = Math.Max(0, Math.Min(2, ReadIntSetting("GPU", "compile_mode", 1)));
+            mode.SelectedIndex = ReadShaderCompilationMode();
             modeRow.Controls.Add(modeLabel);
             modeRow.Controls.Add(mode);
             shaders.Controls.Add(modeRow);
@@ -1859,9 +1863,15 @@ namespace RyGT
             mode.SelectedIndexChanged += delegate
             {
                 batch.Enabled = mode.SelectedIndex == 0;
+                if (refreshingShaderCompilationPolicy || mode.SelectedIndex < 0) return;
                 try { WriteSetting("GPU", "compile_mode", mode.SelectedIndex); }
                 catch (Exception e) { MessageBox.Show(this, "Could not save the setting: " + e.Message); }
             };
+            shaderCompilationAvailability = new Label { AutoSize = true, MaximumSize = new Size(380, 0),
+                ForeColor = Color.Silver, BackColor = Color.Transparent, Margin = new Padding(0, 2, 0, 6) };
+            shaders.Controls.Add(shaderCompilationAvailability);
+            try { RefreshShaderCompilationPolicy(); }
+            catch (Exception e) { MessageBox.Show(this, "Could not save the shader policy: " + e.Message); }
 
             // Controls: which controller is which player (splitscreen) with a live preview, the
             // controller and keyboard bindings, and racing wheels and pedals (ryty-input.ini /
@@ -2315,6 +2325,58 @@ namespace RyGT
             Directory.CreateDirectory(Path.GetDirectoryName(ConfigPath));
             File.WriteAllText(ConfigPath, new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(config),
                               new UTF8Encoding(false));
+            RefreshShaderCompilationPolicy();
+        }
+
+        bool? AllowsKeepGoing()
+        {
+            try
+            {
+                return ShaderCompilationPolicy.AllowsKeepGoing(VulkanDevices.Enumerate(),
+                    ReadStringSetting("Vulkan", "device_uuid", ""), ReadIntSetting("Vulkan", "gpu_id", -1));
+            }
+            catch { return null; } // Unknown is not evidence of an AMD device.
+        }
+
+        void RefreshShaderCompilationPolicy()
+        {
+            if (shaderCompileMode != null) ApplyShaderCompilationPolicy(AllowsKeepGoing());
+        }
+
+        int ReadShaderCompilationMode()
+        {
+            // The renderer defaults to Keep going and clamps manually edited values to 0..2.
+            return Math.Max(0, Math.Min(2, ReadIntSetting("GPU", "compile_mode", 2)));
+        }
+
+        void ApplyShaderCompilationPolicy(bool? allowed)
+        {
+            int saved = ReadShaderCompilationMode();
+            int selected = allowed == false && saved == 2 ? 1 : saved;
+            refreshingShaderCompilationPolicy = true;
+            try
+            {
+                shaderCompileMode.Items.Clear();
+                shaderCompileMode.Items.AddRange(new object[] { "Pause the game", "Slow motion" });
+                if (allowed != false) shaderCompileMode.Items.Add("Keep going (objects pop in)");
+                shaderCompileMode.SelectedIndex = selected;
+                shaderCompilationAvailability.Text = allowed == false
+                    ? "Keep going is unavailable for AMD graphics."
+                    : allowed == null ? "GPU detection failed. Keep going will be checked again before starting." : "";
+                shaderCompilationAvailability.Visible = allowed != true;
+            }
+            finally { refreshingShaderCompilationPolicy = false; }
+            // Population does not fire the saving handler. Repair a saved Keep going explicitly.
+            if (selected != saved) WriteSetting("GPU", "compile_mode", selected);
+        }
+
+        void EnforceShaderCompilationPolicy()
+        {
+            if (ReadShaderCompilationMode() != 2) return;
+            bool? allowed = AllowsKeepGoing();
+            if (!allowed.HasValue)
+                throw new Exception("Could not identify the Vulkan device for Keep going. Choose Pause the game or Slow motion in Settings > Shaders, or check the graphics driver.");
+            ApplyShaderCompilationPolicy(allowed);
         }
 
         void ResolveVulkanDevice()
@@ -3345,7 +3407,7 @@ namespace RyGT
         void Play()
         {
             if (!File.Exists(Exe)) { MessageBox.Show(this, "Press Set up first."); return; }
-            try { ApplyExperimentalRenderScale(); ResolveVulkanDevice(); }
+            try { ApplyExperimentalRenderScale(); ResolveVulkanDevice(); EnforceShaderCompilationPolicy(); }
             catch (Exception e) { MessageBox.Show(this, e.Message); return; }
             // Without its data index GT Sport closes right after the splash screen.
             string dataProblem = ReadProblem(Path.Combine(root, "app0", "gt.idx"), -1);
@@ -3409,6 +3471,12 @@ namespace RyGT
                         ShowSetupDumpHelp(failure);
                         return;
                     }
+                    try
+                    {
+                        ResolveVulkanDevice();
+                        EnforceShaderCompilationPolicy();
+                    }
+                    catch (Exception e) { status.Text = "Could not start GT Sport."; MessageBox.Show(this, e.Message); return; }
                     StartGame(root, settings.HddStreaming, experimentalSceneSize);
                     status.Text = "GT Sport is starting. Logs: logs\\stdout.log and logs\\stderr.log.";
                 }));
@@ -3419,7 +3487,7 @@ namespace RyGT
 
         /// Starts GTSport.exe with session log rotation and waits for GPU recovery if Vulkan loses
         /// its device.
-        static void StartGame(string root, bool hddStreaming, Size? sceneSize)
+        void StartGame(string root, bool hddStreaming, Size? sceneSize)
         {
             string exe = Path.Combine(root, "GTSport.exe");
             // Preserve GT Sport metadata while migrating the launcher publisher field from older installs.
@@ -3451,6 +3519,9 @@ namespace RyGT
                         RenderResolution.ConfigureStart(start, root, sceneSize);
                         start.EnvironmentVariables["RYGT_LOG_DIRECTORY"] = logDirectory;
                         start.EnvironmentVariables["RYGT_HDD_STREAMING"] = hddStreaming ? "1" : "0";
+                        // A recovered device can differ from the initial one. Check every launch,
+                        // including the device-loss retry, on the UI thread before spawning.
+                        Invoke(new Action(delegate { ResolveVulkanDevice(); EnforceShaderCompilationPolicy(); }));
                         started = Process.Start(start);
                     }
                     catch (Exception e)
