@@ -214,8 +214,14 @@ public:
         SYSTEM_INFO system{};
         GetSystemInfo(&system);
         for (std::size_t done = 0; done < bytes; done += pageBytes, ++view) {
-            if (view == views.end() || view->first != address + done || view->second.offset != offset + done) throw refuse("the range is not one contiguous run of views of a section");
-            if (view->second.section != section && !sameSection(view->second.section->handle, section->handle)) throw refuse("the range spans several sections");
+            const auto bad = [&](const char* reason) {
+                char text[128];
+                std::snprintf(text, sizeof(text), "%s at offset 0x%llx", reason, static_cast<unsigned long long>(done));
+                return refuse(text);
+            };
+            if (view == views.end() || view->first != address + done) throw bad("view gap");
+            if (view->second.offset != offset + done) throw bad("section offset discontinuity");
+            if (view->second.section != section && !sameSection(view->second.section->handle, section->handle)) throw bad("different section");
         }
         const auto lead = offset % system.dwAllocationGranularity;
         void* alias = map(section->handle, GetCurrentProcess(), nullptr, offset - lead, lead + bytes, 0, PAGE_READWRITE, nullptr, 0);
