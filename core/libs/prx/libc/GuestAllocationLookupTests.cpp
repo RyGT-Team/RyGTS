@@ -1,17 +1,33 @@
 #include "prx/libc/include/GuestAllocations.hpp"
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <random>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+static std::atomic<int> allocationCountdown{-1};
+void* operator new(std::size_t size) {
+    int current = allocationCountdown.load();
+    if (current >= 0 && allocationCountdown.fetch_sub(1) == 0) throw std::bad_alloc();
+    if (void* p = std::malloc(size ? size : 1)) return p;
+    throw std::bad_alloc();
+}
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete(void* p, std::size_t) noexcept { std::free(p); }
 
 namespace {
 using GuestAllocations::Range;
 using Address = std::uintptr_t;
 std::uint64_t checks = 0;
+GuestAllocations::Lease* pinnedLease = nullptr;
+unsigned pinWaits = 0;
+bool ReleaseTestLease() { ++pinWaits; pinnedLease->clear(); return true; }
 
 void Require(bool value, const char* message) {
     if (!value) throw std::runtime_error(message);
@@ -122,6 +138,98 @@ void CheckSplitRanges() {
     mutation.Remove(reinterpret_cast<void*>(base));
 }
 
+void CheckTransactions() {
+    constexpr Address base = 0x20000000;
+    auto ptr = [](Address a) { return reinterpret_cast<void*>(a); };
+    {
+        GuestAllocations::Mutation m;
+        m.Add(ptr(base), 0x3000, true, true);
+        m.Add(ptr(base + 0x3000), 0x1000, true, true);
+        bool called = false;
+        try { m.Protect(ptr(base + 0x1000), 0x1000, true, false, [&] { called = true; throw std::runtime_error("apply"); }); }
+        catch (const std::runtime_error&) {}
+        Require(called && m.Covers(ptr(base), 0x4000) && m.Find(ptr(base)).writable,
+                "throwing protect changed registry or permissions");
+        m.Protect(ptr(base + 0x1000), 0x1000, true, false, [] {});
+        unsigned calls = 0;
+        try { m.Unmap(ptr(base + 0x1000), 0x3000, [&](const void*, std::size_t, const void*, bool last) {
+            ++calls; if (calls == 1) Require(!last, "partial allocation marked last");
+            else { Require(last, "whole second allocation not marked last"); throw std::runtime_error("second piece"); }
+        }); } catch (const std::runtime_error&) {}
+        Require(calls == 2 && !m.Overlaps(ptr(base + 0x1000), 0x2000) && m.Covers(ptr(base + 0x3000), 0x1000),
+                "unmap did not preserve per-piece commit");
+        m.Remove(ptr(base)); m.Remove(ptr(base + 0x3000));
+    }
+    {
+        GuestAllocations::Mutation m;
+        m.Add(ptr(base), 0x3000, true, true);
+        bool called = false;
+        const std::function<void()> apply = [&] { called = true; };
+        allocationCountdown = 1; // recordChange grows first; the staged plan then allocates
+        bool failed = false;
+        try { m.Protect(ptr(base + 0x1000), 0x1000, true, false, apply); }
+        catch (const std::bad_alloc&) { failed = true; }
+        allocationCountdown = -1;
+        Require(failed && !called && m.Covers(ptr(base), 0x3000), "allocation failure changed registry or reached apply");
+        m.Remove(ptr(base));
+    }
+    {
+        GuestAllocations::Mutation m;
+        m.Add(ptr(base), 0x3000, true, true);
+        m.Protect(ptr(base + 0x1000), 0x1000, true, false, [] { allocationCountdown = 0; });
+        allocationCountdown = -1;
+        Require(m.Covers(ptr(base), 0x3000), "allocation-free protect commit lost a range");
+        m.Unmap(ptr(base + 0x1000), 0x1000, [](const void*, std::size_t, const void*, bool) { allocationCountdown = 0; });
+        allocationCountdown = -1;
+        Require(!m.Overlaps(ptr(base + 0x1000), 0x1000), "allocation-free unmap commit retained a range");
+        m.Remove(ptr(base));
+    }
+    {
+        GuestAllocations::Mutation m;
+        m.Add(ptr(base), 0x1000, true, true);
+        m.Add(ptr(base + 0x2000), 0x1000, true, true);
+        bool called = false;
+        try { m.Protect(ptr(base), 0x1000, false, true, [&] { called = true; }); }
+        catch (const std::runtime_error&) {}
+        Require(!called && m.Covers(ptr(base), 0x1000), "invalid protection reached apply");
+        try { m.Protect(ptr(std::numeric_limits<Address>::max() - 1), 8, true, false, [&] { called = true; }); }
+        catch (const std::runtime_error&) {}
+        Require(!called, "overflow reached apply");
+        try { m.Protect(ptr(base), 0x3000, true, false, [&] { called = true; }); }
+        catch (const std::runtime_error&) {}
+        Require(!called && m.Covers(ptr(base), 0x1000) && m.Covers(ptr(base + 0x2000), 0x1000), "hole reached apply");
+        m.Remove(ptr(base)); m.Remove(ptr(base + 0x2000));
+    }
+    {
+        // Zero-length entries at an allocation boundary must not be silently erased.
+        GuestAllocations::Mutation m;
+        m.Add(ptr(base), 0x1000, true, true);
+        m.Add(ptr(base + 0x1000), 0, true, true);
+        m.Add(ptr(base + 0x2000), 0x1000, true, true);
+        bool called = false;
+        try { m.Protect(ptr(base), 0x3000, true, false, [&] { called = true; }); }
+        catch (const std::runtime_error&) {}
+        Require(!called && m.Covers(ptr(base), 0x1000) && m.Covers(ptr(base + 0x2000), 0x1000), "zero-size boundary hid a hole");
+        m.Remove(ptr(base)); m.Remove(ptr(base + 0x1000)); m.Remove(ptr(base + 0x2000));
+    }
+    {
+        { GuestAllocations::Mutation m; m.Add(ptr(base), 0x1000, true, true); m.Add(ptr(base + 0x2000), 0x1000, true, true); }
+        auto lease = GuestAllocations::GuestAllocationsAcquire_nid_postfix();
+        Require(lease.size() == 2, "expected two snapshot ranges");
+        const auto* unchanged = lease[1].get();
+        pinnedLease = &lease; pinWaits = 0;
+        GuestAllocations::GuestAllocationsSetPinWaiter_nid_postfix(ReleaseTestLease);
+        { GuestAllocations::Mutation m; m.Protect(ptr(base), 0x1000, true, false, [] {}); }
+        GuestAllocations::GuestAllocationsSetPinWaiter_nid_postfix(nullptr);
+        Require(pinWaits != 0, "pinned mutation did not wait");
+        auto after = GuestAllocations::GuestAllocationsAcquire_nid_postfix();
+        Require(after.size() == 2 && after[1].get() == unchanged, "unaffected snapshot identity changed");
+        // Release the snapshot before removing its ranges.
+        after.clear();
+        { GuestAllocations::Mutation m; m.Remove(ptr(base)); m.Remove(ptr(base + 0x2000)); }
+    }
+}
+
 void CheckMainImage() {
 #ifdef _WIN32
     { GuestAllocations::Mutation mutation; mutation.RegisterMainImage(); }
@@ -161,6 +269,20 @@ void Benchmark() {
     std::printf("registry_lookup_benchmark entries=%u queries=6000 ms=%.6f\n", entries, elapsed);
     for (unsigned i = 0; i < entries; ++i) mutation.Remove(reinterpret_cast<void*>(base + i * 0x100));
 }
+
+void BenchmarkTransactions(unsigned entries) {
+    GuestAllocations::Mutation mutation;
+    constexpr Address base = 0x40000000;
+    for (unsigned i = 0; i < entries; ++i)
+        mutation.Add(reinterpret_cast<void*>(base + i * 0x1000), 0x1000, true, true);
+    const auto start = std::chrono::steady_clock::now();
+    for (unsigned i = 0; i < 128; ++i)
+        mutation.Protect(reinterpret_cast<void*>(base + (entries / 2) * 0x1000), 0x1000, true, (i & 1) != 0, [] {});
+    const auto elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    std::printf("guest_range_transaction_benchmark entries=%u operations=128 ms=%.3f\n", entries, elapsed);
+    for (unsigned i = 0; i < entries; ++i)
+        mutation.Remove(reinterpret_cast<void*>(base + i * 0x1000));
+}
 }
 
 int main() {
@@ -182,7 +304,10 @@ int main() {
             Exercise(ranges, random);
         }
         CheckSplitRanges();
+        CheckTransactions();
         Benchmark();
+        BenchmarkTransactions(1024);
+        BenchmarkTransactions(32768);
         CheckMainImage();
         std::printf("guest_allocation_lookup checks=%llu passed\n", static_cast<unsigned long long>(checks));
         return 0;
