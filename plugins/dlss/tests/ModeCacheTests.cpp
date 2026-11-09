@@ -83,6 +83,23 @@ void UnsupportedResizePreservesThePreviousResolution() {
     Check(queries == 0, "previous successful selection was queried again");
 }
 
+void AlternatingResolutionsAreBothCached() {
+    // The scene and the UI-HIRES proxy are scaled in the same frame at different sizes.
+    RygtDlss::ModeCache<Mode> cache;
+    const RygtDlss::Resolution scene{1920, 1080, 2560, 1440};
+    const RygtDlss::Resolution proxy{2560, 1440, 5120, 1440};
+    int queries = 0;
+    const auto query = [&]() {
+        ++queries;
+        return std::optional<Mode>{Mode::Quality};
+    };
+    for (int frame = 0; frame < 1000; ++frame) {
+        Check(cache.Get(scene, query) == Mode::Quality, "scene mode changed");
+        Check(cache.Get(proxy, query) == Mode::Quality, "proxy mode changed");
+    }
+    Check(queries == 2, "alternating resolutions repeated the NGX query path");
+}
+
 void NewDeviceSessionQueriesAgain() {
     RygtDlss::ModeCache<Mode> cache;
     const RygtDlss::Resolution resolution{1920, 1080, 2560, 1440};
@@ -109,10 +126,11 @@ int main() {
         FailedQueryCanRecover();
         UnsupportedResizePreservesThePreviousResolution();
         NewDeviceSessionQueriesAgain();
+        AlternatingResolutionsAreBothCached();
     } catch (const std::exception& error) {
         std::fprintf(stderr, "%s\n", error.what());
         return 1;
     }
-    std::puts("DLSS mode cache: 5 regression scenarios passed");
+    std::puts("DLSS mode cache: 6 regression scenarios passed");
     return 0;
 }
