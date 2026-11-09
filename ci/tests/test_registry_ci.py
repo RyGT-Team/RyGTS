@@ -17,7 +17,7 @@ spec.loader.exec_module(registry)
 SOURCE = 'a' * 40
 RENDERER = 'b' * 40
 OTHER = 'c' * 40
-REPOSITORY = 'https://gitlab.com/rygt-team/ShadGT.git'
+REPOSITORY = 'https://github.com/RyGT-Team/shadGT.git'
 
 
 def response(value):
@@ -47,13 +47,13 @@ class RendererRevisionTests(IsolatedWorkflowFiles):
     def test_pinned_revision_uses_source_policy_only(self):
         with patch.object(registry.urllib.request, 'urlopen', return_value=response(policy(RENDERER))) as request:
             self.assertEqual(registry.renderer_revision(SOURCE), RENDERER)
-        request.assert_called_once_with(registry.API + '/repository/files/renderer%2Fsource.json/raw?ref=' + SOURCE, timeout=60)
+        request.assert_called_once_with('https://raw.githubusercontent.com/RyGT-Team/RyGTS/' + SOURCE + '/renderer/source.json', timeout=60)
 
     def test_head_resolves_official_branch_once(self):
-        with patch.object(registry.urllib.request, 'urlopen', side_effect=[response(policy()), response({'commit': {'id': RENDERER}})]) as request:
+        with patch.object(registry.urllib.request, 'urlopen', side_effect=[response(policy()), response({'sha': RENDERER})]) as request:
             self.assertEqual(registry.renderer_revision(SOURCE), RENDERER)
         self.assertEqual(request.call_count, 2)
-        self.assertEqual(request.call_args_list[1].args[0], 'https://gitlab.com/api/v4/projects/rygt-team%2FShadGT/repository/branches/ryty-gpu')
+        self.assertEqual(request.call_args_list[1].args[0], 'https://api.github.com/repos/RyGT-Team/shadGT/commits/ryty-gpu')
 
     def test_repository_comparison_ignores_case(self):
         with patch.object(registry.urllib.request, 'urlopen', return_value=response(policy(RENDERER, REPOSITORY.upper()))):
@@ -67,7 +67,7 @@ class RendererRevisionTests(IsolatedWorkflowFiles):
                 self.assertEqual(request.call_count, 1)
 
     def test_invalid_head_rejected(self):
-        with patch.object(registry.urllib.request, 'urlopen', side_effect=[response(policy()), response({'commit': {'id': 'bad'}})]):
+        with patch.object(registry.urllib.request, 'urlopen', side_effect=[response(policy()), response({'sha': 'bad'})]):
             with self.assertRaises((ValueError, RuntimeError)):
                 registry.renderer_revision(SOURCE)
 
@@ -80,12 +80,42 @@ class RendererRevisionTests(IsolatedWorkflowFiles):
 
 
 class ResolveTests(IsolatedWorkflowFiles):
+    def test_github_only_runtime_and_renderer_overrides_need_no_gitlab_source(self):
+        requests = []
+        def open_url(url, timeout):
+            requests.append(url)
+            if url == registry.SOURCE_API + '/commits/' + SOURCE:
+                return response({'sha': SOURCE})
+            if url == 'https://raw.githubusercontent.com/RyGT-Team/RyGTS/' + SOURCE + '/renderer/source.json':
+                return response(policy())
+            if url == registry.RENDERER_API + '/commits/' + RENDERER:
+                return response({'sha': RENDERER})
+            if url.startswith(registry.API + '/packages/generic/'):
+                raise urllib.error.HTTPError(url, 404, 'Not Found', {}, None)
+            self.fail('Unexpected source request: ' + url)
+        with patch.dict(os.environ, {'SOURCE_OVERRIDE_SHA': SOURCE, 'RENDERER_OVERRIDE_SHA': RENDERER}), \
+                patch.object(registry.urllib.request, 'urlopen', side_effect=open_url):
+            registry.resolve('ci')
+        self.assertEqual(len(requests), 4)
+        self.assertIn('renderer_commit=' + RENDERER, self.workflow_output.read_text())
+
+    def test_missing_github_source_never_falls_back_to_gitlab(self):
+        missing = urllib.error.HTTPError('url', 404, 'Not Found', {}, None)
+        with patch.dict(os.environ, {'SOURCE_OVERRIDE_SHA': SOURCE}), \
+                patch.object(registry.urllib.request, 'urlopen', side_effect=missing) as request, \
+                patch('github_source.time.sleep'), \
+                patch('github_source.wait_for_commit', side_effect=AssertionError('unexpected fallback')):
+            with self.assertRaisesRegex(RuntimeError, 'GitHub did not provide'):
+                registry.resolve('ci')
+        self.assertTrue(all(call.args[0] == registry.SOURCE_API + '/commits/' + SOURCE
+                            for call in request.call_args_list))
+
     def run_resolve(self, markers, channel=None):
         requests = []
         def open_url(url, timeout):
             requests.append(url)
-            if url.endswith('/repository/branches/development'):
-                return response({'commit': {'id': SOURCE}})
+            if url.endswith('/commits/development'):
+                return response({'sha': SOURCE})
             channel = 'debug-ci' if '/debug-ci/' in url else 'ci'
             marker = markers[channel]
             if marker is None:
@@ -105,11 +135,11 @@ class ResolveTests(IsolatedWorkflowFiles):
         markers = {channel: {'commit': SOURCE, 'renderer_commit': RENDERER, 'channel': channel} for channel in registry.CHANNELS}
         output, requests = self.run_resolve(markers)
         self.assertEqual(output, {'commit': SOURCE, 'renderer_commit': RENDERER, 'version': f'development-{SOURCE}-renderer-{RENDERER}', 'needed': 'false'})
-        self.assertEqual(sum('/repository/branches/development' in url for url in requests), 1)
+        self.assertEqual(sum('/commits/development' in url for url in requests), 1)
         self.assertTrue(all(output['version'] in url for url in requests[1:]))
         summary = self.summary.read_text()
-        self.assertIn(f'[`{SOURCE}`](https://gitlab.com/rygt-team/RyGTS/-/commit/{SOURCE})', summary)
-        self.assertIn(f'[`{RENDERER}`](https://gitlab.com/rygt-team/shadGT/-/commit/{RENDERER})', summary)
+        self.assertIn(f'[`{SOURCE}`](https://github.com/RyGT-Team/RyGTS/commit/{SOURCE})', summary)
+        self.assertIn(f'[`{RENDERER}`](https://github.com/RyGT-Team/shadGT/commit/{RENDERER})', summary)
         self.assertNotIn('/packages/generic/', summary)
         self.assertNotIn('[ZIP]', summary)
 
@@ -180,8 +210,8 @@ class PublishTests(IsolatedWorkflowFiles):
                 self.assertTrue(all(url.endswith('/CI-BUILD.json') for url in order[-2:]))
                 self.assertTrue(all(json.loads(uploads[url])['renderer_commit'] == RENDERER for url in order[-2:]))
                 summary = (root / 'summary').read_text()
-                self.assertIn(f'/-/commit/{SOURCE}', summary)
-                self.assertIn(f'/-/commit/{RENDERER}', summary)
+                self.assertIn(f'/commit/{SOURCE}', summary)
+                self.assertIn(f'/commit/{RENDERER}', summary)
                 for variant in variants:
                     self.assertIn(f'SHA-256: `{variant["sha256"]}`', summary)
                     self.assertIn(variant['archive'], summary)

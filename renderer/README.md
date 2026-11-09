@@ -1,5 +1,5 @@
 > Current source workflow: renderer fixes are committed directly to
-> [ShadGT ryty-gpu](https://gitlab.com/rygt-team/ShadGT/-/tree/ryty-gpu).
+> [ShadGT ryty-gpu](https://github.com/RyGT-Team/shadGT/tree/ryty-gpu).
 > [source.json](source.json) pins the exact revision CI builds. Do not apply a
 > separate patch series. The patch references below are historical investigation
 > notes; their source is retained in Git history. See [CI instructions](../docs/dev/CI.md).

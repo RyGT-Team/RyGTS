@@ -104,7 +104,7 @@ class PackageTests(unittest.TestCase):
                     self.assertEqual(info['channel'], variant['channel'])
                     self.assertEqual(info['rebuilt'], ['RyGTS.exe', 'libs/libSceVideoOut.prx'])
                     self.assertEqual(info['renderer_source'].splitlines(), [
-                        'https://gitlab.com/rygt-team/ShadGT.git', RENDERER_SHA])
+                        'https://github.com/RyGT-Team/shadGT.git', RENDERER_SHA])
                     self.assertNotIn('runtime_overlay', info)
                     for line in z.read(prefix + 'SHA256SUMS.txt').decode().splitlines():
                         digest, name = line.split('  ', 1)
@@ -221,7 +221,7 @@ class PackageTests(unittest.TestCase):
             (root / 'renderer').mkdir(parents=True)
             (root / 'ci').mkdir()
             (root / 'renderer/source.json').write_text(json.dumps({
-                'repository': 'https://gitlab.com/rygt-team/ShadGT.git',
+                'repository': 'https://github.com/RyGT-Team/shadGT.git',
                 'branch': 'ryty-gpu', 'commit': 'HEAD'}))
             prepared = Path(temp) / 'prepared'
 

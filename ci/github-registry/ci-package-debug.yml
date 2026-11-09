@@ -69,7 +69,7 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.12'
-      - name: Fetch exact GitLab source
+      - name: Fetch exact GitHub source
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -78,9 +78,9 @@ jobs:
           Set-Location $env:RYGT_CI_ROOT
           git init
           git config core.longpaths true
-          git remote add origin https://gitlab.com/rygt-team/RyGTS.git
+          git remote add origin https://github.com/RyGT-Team/RyGTS.git
           git fetch --depth=1 origin $env:SOURCE_SHA
-          if ($LASTEXITCODE) { throw 'GitLab fetch failed' }
+          if ($LASTEXITCODE) { throw 'GitHub fetch failed' }
           git checkout --detach FETCH_HEAD
           if ($LASTEXITCODE -or (git rev-parse HEAD) -cne $env:SOURCE_SHA) { throw 'Source mismatch' }
       - name: Build Diagnostics launcher and renderer
@@ -116,13 +116,13 @@ jobs:
       SOURCE_SHA: ${{ needs.source.outputs.commit }}
       RENDERER_SHA: ${{ needs.source.outputs.renderer_commit }}
     steps:
-      - name: Fetch exact GitLab source
+      - name: Fetch exact GitHub source
         run: |
           set -euo pipefail
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           git init source
           cd source
-          git remote add origin https://gitlab.com/rygt-team/RyGTS.git
+          git remote add origin https://github.com/RyGT-Team/RyGTS.git
           git fetch --depth=1 origin "$SOURCE_SHA"
           git checkout --detach FETCH_HEAD
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
@@ -154,13 +154,13 @@ jobs:
           repository: RyGT-Team/RyGTS
           ref: ${{ needs.source.outputs.controller_commit }}
           persist-credentials: false
-      - name: Fetch exact GitLab source
+      - name: Fetch exact GitHub source
         run: |
           set -euo pipefail
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           git init source
           cd source
-          git remote add origin https://gitlab.com/rygt-team/RyGTS.git
+          git remote add origin https://github.com/RyGT-Team/RyGTS.git
           git fetch --depth=1 origin "$SOURCE_SHA"
           git checkout --detach FETCH_HEAD
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
