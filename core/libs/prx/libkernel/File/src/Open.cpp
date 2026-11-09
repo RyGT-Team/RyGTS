@@ -129,6 +129,7 @@ std::int64_t ReadIntoGuest(void* buffer, std::size_t bytes, const std::function<
         std::fprintf(stderr, "[file] read into %p (%zu bytes) failed (errno %d); read again through a host buffer\n",
                      buffer, bytes, error);
     }
+    PrepareGuestWrite(buffer, static_cast<std::size_t>(retried));
     std::memcpy(buffer, bounce.data(), static_cast<std::size_t>(retried));
     return retried;
 }
