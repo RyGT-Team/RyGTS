@@ -44,13 +44,7 @@ VkPhysicalDevice g_physical_device = VK_NULL_HANDLE;
 VkDevice g_device = VK_NULL_HANDLE;
 bool g_initialized = false;
 NVSDK_NGX_Parameter* g_params = nullptr;
-NVSDK_NGX_Handle* g_feature = nullptr;
-uint32_t g_feature_in_w = 0, g_feature_in_h = 0, g_feature_out_w = 0, g_feature_out_h = 0;
 RygtDlss::ModeCache<NVSDK_NGX_PerfQuality_Value> modeCache;
-RygtDlss::TemporalHistory temporalHistory;
-bool g_feature_temporal = false;
-RygtDlssQuality g_temporal_quality = RYGT_DLSS_QUALITY_DLAA;
-uint32_t g_temporal_flags = 0;
 
 // Device functions the plugin itself uses.
 PFN_vkGetPhysicalDeviceMemoryProperties p_vkGetPhysicalDeviceMemoryProperties = nullptr;
@@ -75,7 +69,26 @@ struct AuxImage {
     uint32_t width = 0, height = 0;
     bool cleared = false;
 };
-AuxImage g_motion, g_depth;
+
+// One DLSS feature per kind of scaling the renderer asks for. The renderer can scale more than one
+// picture per frame (with "Draw the UI at screen resolution" and a picture narrower than the screen:
+// the scene, then the UI-HIRES proxy at the output size). With a single shared feature, every
+// change of size or kind released the feature (after vkDeviceWaitIdle) and created a new one, so
+// such frames ran at 10-15 fps. Each kind now keeps its own feature; the least recently used one
+// is released only when more kinds than this are in use.
+struct FeatureSlot {
+    NVSDK_NGX_Handle* handle = nullptr;
+    bool temporal = false;
+    uint32_t in_w = 0, in_h = 0, out_w = 0, out_h = 0;
+    RygtDlssQuality quality = RYGT_DLSS_QUALITY_DLAA;  // temporal features only
+    uint32_t flags = 0;                                 // temporal features only
+    AuxImage motion, depth;                             // single-frame features only
+    RygtDlss::TemporalHistory history;
+    uint64_t last_used = 0;
+};
+constexpr size_t MaxFeatures = 4;
+FeatureSlot g_slots[MaxFeatures];
+uint64_t g_use_clock = 0;
 
 void SetError(const std::string& message) {
     g_error = message;
@@ -262,14 +275,51 @@ bool PickMode(uint32_t in_w, uint32_t in_h, uint32_t out_w, uint32_t out_h,
     return true;
 }
 
-void ReleaseFeature() {
-    if (g_feature) {
-        if (p_vkDeviceWaitIdle) p_vkDeviceWaitIdle(g_device);
-        NVSDK_NGX_VULKAN_ReleaseFeature(g_feature);
-        g_feature = nullptr;
+void ReleaseSlot(FeatureSlot& slot) {
+    const bool has_aux = slot.motion.image || slot.depth.image;
+    if (slot.handle || has_aux) {
+        if (p_vkDeviceWaitIdle && g_device) p_vkDeviceWaitIdle(g_device);
     }
-    temporalHistory.Invalidate();
-    g_feature_temporal = false;
+    if (slot.handle) {
+        NVSDK_NGX_VULKAN_ReleaseFeature(slot.handle);
+    }
+    if (has_aux && g_device) {
+        DestroyAux(slot.motion);
+        DestroyAux(slot.depth);
+    }
+    slot = FeatureSlot{};
+}
+
+void ReleaseAllFeatures() {
+    for (auto& slot : g_slots) ReleaseSlot(slot);
+}
+
+// The live feature for this kind of scaling, if there is one; marks it as just used.
+FeatureSlot* FindSlot(bool temporal, uint32_t in_w, uint32_t in_h, uint32_t out_w, uint32_t out_h,
+                      RygtDlssQuality quality = RYGT_DLSS_QUALITY_DLAA, uint32_t flags = 0) {
+    for (auto& slot : g_slots) {
+        if (slot.handle && slot.temporal == temporal && slot.in_w == in_w && slot.in_h == in_h &&
+            slot.out_w == out_w && slot.out_h == out_h &&
+            (!temporal || (slot.quality == quality && slot.flags == flags))) {
+            slot.last_used = ++g_use_clock;
+            return &slot;
+        }
+    }
+    return nullptr;
+}
+
+// A free slot for a new feature: an empty one, else the least recently used one, released.
+FeatureSlot& FreeSlot() {
+    FeatureSlot* oldest = &g_slots[0];
+    for (auto& slot : g_slots) {
+        if (!slot.handle) {
+            ReleaseSlot(slot);  // drops any leftover input images
+            return slot;
+        }
+        if (slot.last_used < oldest->last_used) oldest = &slot;
+    }
+    ReleaseSlot(*oldest);
+    return *oldest;
 }
 
 bool TemporalQuality(RygtDlssQuality quality, NVSDK_NGX_PerfQuality_Value& mode) {
@@ -390,7 +440,7 @@ __declspec(dllexport) int VKAPI_CALL RygtDlss_Init(VkInstance instance,
                                                    PFN_vkGetDeviceProcAddr gdpa,
                                                    const wchar_t* data_path) {
     modeCache.Reset();
-    temporalHistory.Invalidate();
+    for (auto& slot : g_slots) slot.history.Invalidate();
     SetupCommonInfo();
     g_instance = instance;
     g_physical_device = physical_device;
@@ -463,14 +513,14 @@ __declspec(dllexport) int VKAPI_CALL RygtDlss_Evaluate(VkCommandBuffer cmd,
         SetError("DLSS is not initialized");
         return 1;
     }
-    if (!g_feature || g_feature_temporal || g_feature_in_w != input->width || g_feature_in_h != input->height ||
-        g_feature_out_w != output->width || g_feature_out_h != output->height) {
-        ReleaseFeature();
+    FeatureSlot* slot = FindSlot(false, input->width, input->height, output->width, output->height);
+    if (!slot) {
         NVSDK_NGX_PerfQuality_Value mode{};
         if (!PickMode(input->width, input->height, output->width, output->height, &mode)) {
             SetError("no DLSS mode scales this input size to this output size");
             return 1;
         }
+        FeatureSlot& fresh = FreeSlot();
         NVSDK_NGX_DLSS_Create_Params create{};
         create.Feature.InWidth = input->width;
         create.Feature.InHeight = input->height;
@@ -478,24 +528,29 @@ __declspec(dllexport) int VKAPI_CALL RygtDlss_Evaluate(VkCommandBuffer cmd,
         create.Feature.InTargetHeight = output->height;
         create.Feature.InPerfQualityValue = mode;
         create.InFeatureCreateFlags = NVSDK_NGX_DLSS_Feature_Flags_MVLowRes;
+        NVSDK_NGX_Handle* handle = nullptr;
         const auto result =
-            NGX_VULKAN_CREATE_DLSS_EXT1(g_device, cmd, 1, 1, &g_feature, g_params, &create);
-        if (NVSDK_NGX_FAILED(result) || !g_feature) {
-            g_feature = nullptr;
+            NGX_VULKAN_CREATE_DLSS_EXT1(g_device, cmd, 1, 1, &handle, g_params, &create);
+        if (NVSDK_NGX_FAILED(result) || !handle) {
             SetError("DLSS feature creation failed: " + ResultText(result));
             return 1;
         }
-        g_feature_in_w = input->width;
-        g_feature_in_h = input->height;
-        g_feature_out_w = output->width;
-        g_feature_out_h = output->height;
-        if (!CreateAux(g_motion, VK_FORMAT_R16G16_SFLOAT, input->width, input->height) ||
-            !CreateAux(g_depth, VK_FORMAT_R32_SFLOAT, input->width, input->height)) {
+        fresh.handle = handle;
+        fresh.temporal = false;
+        fresh.in_w = input->width;
+        fresh.in_h = input->height;
+        fresh.out_w = output->width;
+        fresh.out_h = output->height;
+        fresh.last_used = ++g_use_clock;
+        if (!CreateAux(fresh.motion, VK_FORMAT_R16G16_SFLOAT, input->width, input->height) ||
+            !CreateAux(fresh.depth, VK_FORMAT_R32_SFLOAT, input->width, input->height)) {
+            ReleaseSlot(fresh);
             return 1;
         }
+        slot = &fresh;
     }
-    ClearAux(cmd, g_motion);
-    ClearAux(cmd, g_depth);
+    ClearAux(cmd, slot->motion);
+    ClearAux(cmd, slot->depth);
 
     const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     auto color = NVSDK_NGX_Create_ImageView_Resource_VK(input->view, input->image, range,
@@ -504,12 +559,12 @@ __declspec(dllexport) int VKAPI_CALL RygtDlss_Evaluate(VkCommandBuffer cmd,
     auto out = NVSDK_NGX_Create_ImageView_Resource_VK(output->view, output->image, range,
                                                       output->format, output->width,
                                                       output->height, true);
-    auto motion = NVSDK_NGX_Create_ImageView_Resource_VK(g_motion.view, g_motion.image, range,
-                                                         g_motion.format, g_motion.width,
-                                                         g_motion.height, false);
-    auto depth = NVSDK_NGX_Create_ImageView_Resource_VK(g_depth.view, g_depth.image, range,
-                                                        g_depth.format, g_depth.width,
-                                                        g_depth.height, false);
+    auto motion = NVSDK_NGX_Create_ImageView_Resource_VK(slot->motion.view, slot->motion.image, range,
+                                                         slot->motion.format, slot->motion.width,
+                                                         slot->motion.height, false);
+    auto depth = NVSDK_NGX_Create_ImageView_Resource_VK(slot->depth.view, slot->depth.image, range,
+                                                        slot->depth.format, slot->depth.width,
+                                                        slot->depth.height, false);
     NVSDK_NGX_VK_DLSS_Eval_Params eval{};
     eval.Feature.pInColor = &color;
     eval.Feature.pInOutput = &out;
@@ -522,7 +577,7 @@ __declspec(dllexport) int VKAPI_CALL RygtDlss_Evaluate(VkCommandBuffer cmd,
     eval.InReset = 1; // no motion vectors: never reuse an earlier frame
     eval.InMVScaleX = 1.0f;
     eval.InMVScaleY = 1.0f;
-    const auto result = NGX_VULKAN_EVALUATE_DLSS_EXT(cmd, g_feature, g_params, &eval);
+    const auto result = NGX_VULKAN_EVALUATE_DLSS_EXT(cmd, slot->handle, g_params, &eval);
     if (NVSDK_NGX_FAILED(result)) {
         SetError("DLSS evaluation failed: " + ResultText(result));
         return 1;
@@ -570,10 +625,9 @@ __declspec(dllexport) int VKAPI_CALL RygtDlss_EvaluateTemporal(VkCommandBuffer c
     const uint32_t stable_flags = frame->flags & ~RYGT_DLSS_FRAME_RESET;
     const auto& input = frame->color;
     const auto& output = frame->output;
-    if (!g_feature || !g_feature_temporal || g_feature_in_w != input.width ||
-        g_feature_in_h != input.height || g_feature_out_w != output.width ||
-        g_feature_out_h != output.height || g_temporal_quality != frame->quality ||
-        g_temporal_flags != stable_flags) {
+    FeatureSlot* slot = FindSlot(true, input.width, input.height, output.width, output.height,
+                                 frame->quality, stable_flags);
+    if (!slot) {
         RygtDlssOptimalSettings settings{sizeof(RygtDlssOptimalSettings)};
         if (RygtDlss_GetOptimalSettings(output.width, output.height, frame->quality, &settings)) return 1;
         if (input.width < settings.minimum_width || input.width > settings.maximum_width ||
@@ -581,7 +635,7 @@ __declspec(dllexport) int VKAPI_CALL RygtDlss_EvaluateTemporal(VkCommandBuffer c
             SetError("render dimensions are outside the selected temporal DLSS mode's range");
             return 1;
         }
-        ReleaseFeature();
+        FeatureSlot& fresh = FreeSlot();
         for (const char* key : {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA,
                                NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality,
                                NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Balanced,
@@ -606,17 +660,20 @@ __declspec(dllexport) int VKAPI_CALL RygtDlss_EvaluateTemporal(VkCommandBuffer c
             create.InFeatureCreateFlags |= NVSDK_NGX_DLSS_Feature_Flags_MVJittered;
         if (frame->flags & RYGT_DLSS_FRAME_AUTO_EXPOSURE)
             create.InFeatureCreateFlags |= NVSDK_NGX_DLSS_Feature_Flags_AutoExposure;
-        const auto status = NGX_VULKAN_CREATE_DLSS_EXT1(g_device, cmd, 1, 1, &g_feature, g_params, &create);
-        if (NVSDK_NGX_FAILED(status) || !g_feature) {
-            g_feature = nullptr;
+        NVSDK_NGX_Handle* handle = nullptr;
+        const auto status = NGX_VULKAN_CREATE_DLSS_EXT1(g_device, cmd, 1, 1, &handle, g_params, &create);
+        if (NVSDK_NGX_FAILED(status) || !handle) {
             SetError("DLSS 4.5 temporal feature creation failed: " + ResultText(status));
             return 1;
         }
-        g_feature_in_w = input.width; g_feature_in_h = input.height;
-        g_feature_out_w = output.width; g_feature_out_h = output.height;
-        g_feature_temporal = true;
-        g_temporal_quality = frame->quality;
-        g_temporal_flags = stable_flags;
+        fresh.handle = handle;
+        fresh.temporal = true;
+        fresh.in_w = input.width; fresh.in_h = input.height;
+        fresh.out_w = output.width; fresh.out_h = output.height;
+        fresh.quality = frame->quality;
+        fresh.flags = stable_flags;
+        fresh.last_used = ++g_use_clock;
+        slot = &fresh;
     }
     const VkImageSubresourceRange color_range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     const VkImageSubresourceRange depth_range{
@@ -639,30 +696,26 @@ __declspec(dllexport) int VKAPI_CALL RygtDlss_EvaluateTemporal(VkCommandBuffer c
     eval.InJitterOffsetX = frame->jitter_x;
     eval.InJitterOffsetY = frame->jitter_y;
     eval.InRenderSubrectDimensions = {input.width, input.height};
-    eval.InReset = temporalHistory.NeedsReset(frame->frame_id, frame->flags & RYGT_DLSS_FRAME_RESET);
+    eval.InReset = slot->history.NeedsReset(frame->frame_id, frame->flags & RYGT_DLSS_FRAME_RESET);
     eval.InMVScaleX = frame->motion_scale_x;
     eval.InMVScaleY = frame->motion_scale_y;
     eval.InPreExposure = frame->pre_exposure;
     eval.InExposureScale = frame->exposure_scale;
     eval.InFrameTimeDeltaInMsec = frame->frame_time_ms;
-    const auto status = NGX_VULKAN_EVALUATE_DLSS_EXT(cmd, g_feature, g_params, &eval);
+    const auto status = NGX_VULKAN_EVALUATE_DLSS_EXT(cmd, slot->handle, g_params, &eval);
     if (NVSDK_NGX_FAILED(status)) {
-        temporalHistory.Invalidate();
+        slot->history.Invalidate();
         SetError("DLSS 4.5 temporal evaluation failed: " + ResultText(status));
         return 1;
     }
-    temporalHistory.Commit(frame->frame_id);
+    slot->history.Commit(frame->frame_id);
     SetError("");
     return 0;
 }
 
 __declspec(dllexport) void VKAPI_CALL RygtDlss_Shutdown(void) {
     modeCache.Reset();
-    ReleaseFeature();
-    if (g_device) {
-        DestroyAux(g_motion);
-        DestroyAux(g_depth);
-    }
+    ReleaseAllFeatures();
     if (g_params) {
         NVSDK_NGX_VULKAN_DestroyParameters(g_params);
         g_params = nullptr;
