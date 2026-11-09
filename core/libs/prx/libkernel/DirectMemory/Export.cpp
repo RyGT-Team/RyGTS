@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <cstring>
+#include <cstdlib>
 #include "SceTypes.hpp"
 #include "prx/libc/include/General.hpp"
 #include "prx/libc/include/GuestAllocations.hpp"
@@ -25,8 +26,63 @@
 #include <map>
 #include <cstdio>
 #include <mutex>
+#include <limits>
+#include <exception>
 
 namespace {
+
+// One bounded report per opted-in batch; it owns no mapping locks.
+struct BatchMapTrace {
+ bool active{}; unsigned ordinal{}; int requested{}, flags{}, attempted{}, succeeded{}, error{};
+ unsigned op[6]{}, pages16{}, pages64{}, other{};
+ std::uint64_t bytes{}, start{}, frequency{}, direct_ticks{}, direct_max{};
+ int exceptions{};
+ static std::uint64_t Clock() {
+#ifdef _WIN32
+  LARGE_INTEGER q{}; QueryPerformanceCounter(&q); return static_cast<std::uint64_t>(q.QuadPart);
+#else
+  return 0;
+#endif
+ }
+ explicit BatchMapTrace(int count, int batch_flags) : requested(count), flags(batch_flags) {
+#ifdef _WIN32
+  static const bool enabled=[] { const char* e=std::getenv("RYGT_BATCH_MAP_TRACE"); return e && e[0]=='1' && e[1]=='\0'; }();
+  if (!enabled) return;
+  char path[128]; std::snprintf(path,sizeof(path),"logs/batch-map-%lu.capture",GetCurrentProcessId());
+  if (GetFileAttributesA(path)==INVALID_FILE_ATTRIBUTES) return;
+  static std::atomic<unsigned> claimed{};
+  unsigned value=claimed.load(std::memory_order_relaxed);
+  while (value<256 && !claimed.compare_exchange_weak(value,value+1,std::memory_order_relaxed)) {}
+  if (value>=256) return;
+  ordinal=value+1; LARGE_INTEGER freq{}; QueryPerformanceFrequency(&freq);
+  frequency=static_cast<std::uint64_t>(freq.QuadPart); exceptions=std::uncaught_exceptions(); active=true; start=Clock();
+#endif
+ }
+ void Operation(int operation) {
+  if (!active) return;
+  ++attempted; ++op[operation>=0 && operation<5 ? operation : 5];
+ }
+ void Entry(std::uint64_t length) {
+  if (!active) return;
+  const auto max=(std::numeric_limits<std::uint64_t>::max)();
+  bytes = length > max-bytes ? max : bytes+length;
+  pages16 += length==0x4000; pages64 += length==0x10000; other += length!=0x4000 && length!=0x10000;
+ }
+ void Direct(std::uint64_t begin) { if (active) { const auto elapsed=Clock()-begin; direct_ticks+=elapsed; direct_max=std::max(direct_max,elapsed); } }
+ ~BatchMapTrace() {
+#ifdef _WIN32
+  if (!active) return;
+  const auto end=Clock();
+  std::fprintf(stderr,"[batch-map] pid=%lu tid=%lu ordinal=%u start=%llu end=%llu frequency=%llu requested=%d flags=%d attempted=%d processed=%d error=%d exception=%d op=%u/%u/%u/%u/%u/%u bytes=%llu size16k=%u size64k=%u other=%u direct_ticks=%llu direct_max=%llu\n",
+   GetCurrentProcessId(),GetCurrentThreadId(),ordinal,static_cast<unsigned long long>(start),static_cast<unsigned long long>(end),static_cast<unsigned long long>(frequency),requested,flags,attempted,succeeded,error,std::uncaught_exceptions()>exceptions,op[0],op[1],op[2],op[3],op[4],op[5],static_cast<unsigned long long>(bytes),pages16,pages64,other,static_cast<unsigned long long>(direct_ticks),static_cast<unsigned long long>(direct_max));
+#endif
+ }
+};
+struct BatchDirectTimer {
+ BatchMapTrace& trace; std::uint64_t start;
+ explicit BatchDirectTimer(BatchMapTrace& t) : trace(t), start(t.active ? BatchMapTrace::Clock() : 0) {}
+ ~BatchDirectTimer() { if (start) trace.Direct(start); }
+};
 
 constexpr size_t FLEXIBLE_MEMORY_SIZE = 448ULL * 1024 * 1024;
 
@@ -429,6 +485,7 @@ int APS5_VABI sceKernelBatchMap(KernelBatchMapEntry* entries, int num_entries, i
 int APS5_VABI sceKernelBatchMap2(KernelBatchMapEntry* entries, int num_entries, int* num_entries_out, int flags) {
  return GuardMemoryCall("sceKernelBatchMap2", [&]() -> int {
  if (!entries || num_entries < 0) return SCE_KERNEL_ERROR_EINVAL;
+ BatchMapTrace trace{num_entries, flags};
  constexpr int OpMapDirect = 0;
  constexpr int OpUnmap = 1;
  constexpr int OpProtect = 2;
@@ -438,24 +495,33 @@ int APS5_VABI sceKernelBatchMap2(KernelBatchMapEntry* entries, int num_entries, 
  int result = 0;
  for (; processed < num_entries; ++processed) {
   auto& entry = entries[processed];
-  switch (entry.operation) {
-  case OpMapDirect:
+  const auto operation = entry.operation;
+  if (trace.active) trace.Operation(operation);
+  switch (operation) {
+  case OpMapDirect: {
+   if (trace.active) trace.Entry(entry.length);
+   BatchDirectTimer timer{trace};
    result = DoMapDirect(&entry.start, entry.length, static_cast<uint8_t>(entry.protection), flags, static_cast<int64_t>(entry.offset), 0);
    break;
+  }
   case OpUnmap:
+   if (trace.active) trace.Entry(entry.length);
    result = sceKernelMunmap(reinterpret_cast<uint64_t>(entry.start), entry.length);
    break;
   case OpProtect:
   case OpTypeProtect:
+   if (trace.active) trace.Entry(entry.length);
    result = DoMprotect(entry.start, entry.length, static_cast<uint8_t>(entry.protection));
    break;
   case OpMapFlexible:
+   if (trace.active) trace.Entry(entry.length);
    result = _mapFlexible(&entry.start, entry.length, static_cast<uint8_t>(entry.protection), flags);
    break;
   default:
    throw std::invalid_argument("sceKernelBatchMap2: unsupported operation " + std::to_string(entry.operation));
   }
-  if (result != 0) break;
+  if (result != 0) { if(trace.active) trace.error=result; break; }
+  if (trace.active) ++trace.succeeded;
  }
  if (num_entries_out) *num_entries_out = processed;
  return result;
