@@ -1859,7 +1859,7 @@ namespace RyGT
             var extras = Section(left, "Enhancements");
             AddOption(extras, "Disable motion blur", "GPU", "disable_motion_blur", false);
             AddOption(extras, "PS4 Pro Mode (BROKEN)", "GPU", "ps4_pro", false);
-            AddOption(extras, "Draw the UI at screen resolution", "GPU", "ui_hires", false);
+            uiHiresBox = AddOption(extras, "Draw the UI at screen resolution", "GPU", "ui_hires", false);
             AddOption(extras, "HDR (experimental; needs Windows HDR on)", "GPU", "hdr_allowed", false);
 
             // Shaders: the stored ones are built while the splash screen shows; a new one pauses
@@ -2544,23 +2544,74 @@ namespace RyGT
         // Screen shape (GPU.aspect_ratio, GTS-009 in renderer patch 0051): GT Sport draws a 16:9
         // picture. "Fill the screen" widens the race camera to the shape of the game's window or
         // screen and stretches the picture over it (ultrawide without black bars; the HUD and menus
-        // are stretched too). Read when the game starts.
+        // are stretched too). "True wide" (GPU.wide_scene, WIDE-001 in the renderer) renders the
+        // scene at the screen's shape instead: nothing is stretched, the race HUD moves to the
+        // screen's edges and the menus stay 16:9 in the middle. It needs the native renderer and
+        // the UI at screen resolution, which it turns on. Read when the game starts.
         void AddShapeSetting(TableLayoutPanel panel)
         {
             var row = new FlowLayoutPanel { AutoSize = true, BackColor = Color.Transparent, Margin = new Padding(0, 2, 0, 2), WrapContents = false };
             var label = new Label { Text = "Screen shape", AutoSize = false, Width = 196, Height = 20, BackColor = Color.Transparent, Margin = new Padding(0, 6, 8, 0) };
-            var shape = new DarkComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160, FlatStyle = FlatStyle.Flat };
-            shape.Items.AddRange(new object[] { "16:9 (the game's own)", "Fill the screen (wide)" });
-            shape.SelectedIndex = ReadStringSetting("GPU", "aspect_ratio", "16:9") == "auto" ? 1 : 0;
-            shape.SelectedIndexChanged += delegate
-            {
-                try { WriteSetting("GPU", "aspect_ratio", shape.SelectedIndex == 1 ? "auto" : "16:9"); }
-                catch (Exception e) { MessageBox.Show(this, "Could not save the setting: " + e.Message); }
-            };
+            var shape = new DarkComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 260, FlatStyle = FlatStyle.Flat };
+            shape.Items.AddRange(new object[] { "16:9 (the game's own)", "Fill the screen (stretched)", "True wide (ultrawide, 21:9 / 32:9)" });
+            bool fill = ReadStringSetting("GPU", "aspect_ratio", "16:9") == "auto";
+            shape.SelectedIndex = !fill ? 0 : ReadSetting("GPU", "wide_scene", false) ? 2 : 1;
             row.Controls.Add(label);
             row.Controls.Add(shape);
             panel.Controls.Add(row);
+
+            // Wide scene height (GPU.wide_scene_height): the height the true wide scene renders at;
+            // its width follows the screen's shape. Lower is faster.
+            var heightRow = new FlowLayoutPanel { AutoSize = true, BackColor = Color.Transparent, Margin = new Padding(0, 2, 0, 2), WrapContents = false };
+            var heightLabel = new Label { Text = "Wide scene height", AutoSize = false, Width = 196, Height = 20, BackColor = Color.Transparent, Margin = new Padding(0, 6, 8, 0) };
+            var height = new DarkComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 260, FlatStyle = FlatStyle.Flat };
+            var heights = new[] { 1080, 1200, 1440 };
+            height.Items.AddRange(new object[] { "1080 (recommended)", "1200", "1440 (sharpest, slowest)" });
+            int savedHeight = ReadIntSetting("GPU", "wide_scene_height", 0);
+            if (savedHeight == 0) int.TryParse(ReadStringSetting("GPU", "wide_scene_height", "1080"), out savedHeight);
+            height.SelectedIndex = Math.Max(0, Array.IndexOf(heights, savedHeight));
+            heightRow.Controls.Add(heightLabel);
+            heightRow.Controls.Add(height);
+            panel.Controls.Add(heightRow);
+            var tip = new Label { AutoSize = true, ForeColor = Dark.DimText, BackColor = Color.Transparent, Margin = new Padding(0, 0, 0, 4),
+                Text = "Tip: 1080 runs best and still fills the whole screen width; 1200 and 1440 are sharper but\n" +
+                       "cost fps in big races. True wide turns on the native renderer and the UI at screen resolution." };
+            panel.Controls.Add(tip);
+
+            Action showHeight = delegate
+            {
+                height.Enabled = shape.SelectedIndex == 2;
+                heightLabel.Enabled = height.Enabled;
+            };
+            showHeight();
+            shape.SelectedIndexChanged += delegate
+            {
+                try
+                {
+                    bool wide = shape.SelectedIndex == 2;
+                    WriteSetting("GPU", "aspect_ratio", shape.SelectedIndex == 0 ? "16:9" : "auto");
+                    WriteSetting("GPU", "wide_scene", wide);
+                    if (wide)
+                    {
+                        WriteSetting("GPU", "wide_scene_height", heights[height.SelectedIndex]);
+                        // What the true wide scene needs; the controls show it too.
+                        if (uiHiresBox != null) uiHiresBox.Checked = true; else WriteSetting("GPU", "ui_hires", true);
+                        if (rendererCombo != null) rendererCombo.SelectedIndex = 1; else WriteSetting("GPU", "native_renderer", true);
+                    }
+                }
+                catch (Exception e) { MessageBox.Show(this, "Could not save the setting: " + e.Message); }
+                showHeight();
+            };
+            height.SelectedIndexChanged += delegate
+            {
+                try { WriteSetting("GPU", "wide_scene_height", heights[height.SelectedIndex]); }
+                catch (Exception e) { MessageBox.Show(this, "Could not save the setting: " + e.Message); }
+            };
         }
+
+        // The controls the true wide screen shape turns on (set when they are made).
+        CheckBox uiHiresBox;
+        ComboBox rendererCombo;
 
         void AddMemorySetting(TableLayoutPanel panel)
         {
@@ -2602,6 +2653,7 @@ namespace RyGT
             var renderer = new DarkComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 230, FlatStyle = FlatStyle.Flat };
             renderer.Items.AddRange(new object[] { "Old renderer (default)", "Native renderer (experimental)" });
             renderer.SelectedIndex = ReadSetting("GPU", "native_renderer", false) ? 1 : 0;
+            rendererCombo = renderer;
             renderer.SelectedIndexChanged += delegate
             {
                 try { WriteSetting("GPU", "native_renderer", renderer.SelectedIndex == 1); }
