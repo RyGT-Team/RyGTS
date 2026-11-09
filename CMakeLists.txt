@@ -102,6 +102,30 @@ if(RTY_HAVE_THIRD_PARTY)
     set(SDL_STATIC_PIC ON CACHE BOOL "" FORCE)
     set(RTY_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}")
     set(CMAKE_EXE_LINKER_FLAGS "")
+    # Fixes RyGTS needs in SDL2 that are not in the submodule's commit: each patch in
+    # 3rdparty/patches/SDL2 is applied to the submodule's checkout once (skipped when it is
+    # already applied). See the patch files for what each one fixes.
+    find_package(Git QUIET)
+    file(GLOB rtySdlPatches "${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/patches/SDL2/*.patch")
+    list(SORT rtySdlPatches)
+    foreach(patch IN LISTS rtySdlPatches)
+        if(NOT GIT_FOUND)
+            message(WARNING "git not found, SDL2 patch not applied: ${patch}")
+            continue()
+        endif()
+        execute_process(COMMAND "${GIT_EXECUTABLE}" apply --reverse --check "${patch}"
+                        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/SDL2"
+                        RESULT_VARIABLE rtyPatchApplied OUTPUT_QUIET ERROR_QUIET)
+        if(NOT rtyPatchApplied EQUAL 0)
+            execute_process(COMMAND "${GIT_EXECUTABLE}" apply "${patch}"
+                            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/SDL2"
+                            RESULT_VARIABLE rtyPatchResult)
+            if(NOT rtyPatchResult EQUAL 0)
+                message(FATAL_ERROR "SDL2 patch does not apply: ${patch}")
+            endif()
+            message(STATUS "Applied SDL2 patch ${patch}")
+        endif()
+    endforeach()
     add_subdirectory(3rdparty/SDL2)
     set(CMAKE_EXE_LINKER_FLAGS "${RTY_EXE_LINKER_FLAGS}")
     set(ARCHITECTURE x86_64)
