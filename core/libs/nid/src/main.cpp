@@ -24,12 +24,13 @@ void _writeFile(const std::string& path, const std::vector<std::uint8_t>& data) 
 
 int main(int argc, char* argv[]) {
     if (argc < 3) {
-        std::cerr << "Usage: nid_patcher <library_name> [--preserve-exports <unpatched-library>] <file> [file2 ...]\n";
+        std::cerr << "Usage: nid_patcher <library_name> [--preserve-exports <unpatched-library>] [--preserve-prefix <prefix>] <file> [file2 ...]\n";
         return 1;
     }
 
     const std::string libraryName = argv[1];
     std::unordered_set<std::string> excludedExports;
+    std::vector<std::string> preservedPrefixes;
     std::vector<std::string> paths;
     try {
         bool hasReference = false;
@@ -39,6 +40,10 @@ int main(int argc, char* argv[]) {
                 if (hasReference || i + 1 == argc) throw std::runtime_error("--preserve-exports requires exactly one reference library");
                 hasReference = true;
                 excludedExports = Nid::ReadExportExclusions(argv[++i]);
+            } else if (argument == "--preserve-prefix") {
+                if (i + 1 == argc || std::string(argv[i + 1]).empty() || std::string(argv[i + 1]).starts_with("--"))
+                    throw std::runtime_error("--preserve-prefix requires a nonempty prefix");
+                preservedPrefixes.emplace_back(argv[++i]);
             } else {
                 if (argument.starts_with("--")) throw std::runtime_error("unknown option: " + argument);
                 paths.push_back(argument);
@@ -54,7 +59,14 @@ int main(int argc, char* argv[]) {
         try {
             auto binary = _readFile(path);
             const auto patcher = Nid::MakePatcher(binary);
-            patcher->PatchNids(binary, libraryName, excludedExports);
+            auto exclusions = excludedExports;
+            if (!preservedPrefixes.empty()) {
+                const auto names = Nid::ReadExportExclusions(path);
+                for (const auto& name : names)
+                    for (const auto& prefix : preservedPrefixes)
+                        if (name.starts_with(prefix)) exclusions.insert(name);
+            }
+            patcher->PatchNids(binary, libraryName, exclusions);
             _writeFile(path, binary);
             std::cout << "OK: " << path << "\n";
         } catch (const std::exception& e) {

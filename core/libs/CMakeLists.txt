@@ -116,10 +116,16 @@ foreach(LIB_DIR ${LIBS_DIRS})
         set(UNPATCHED_FILE ${UNPATCHED_DIR}/${LIB_NAME}.prx)
         set(PATCHED_FILE ${PATCHED_DIR}/${LIB_NAME}.prx)
 
+        set(PRESERVE_BRIDGE_EXPORTS)
+        if(LIB_NAME STREQUAL "libRytyNet")
+            # Native HTTP and NP libraries import these C++ bridge symbols by name.
+            set(PRESERVE_BRIDGE_EXPORTS --preserve-prefix _ZN7RytyNet)
+        endif()
+
         add_custom_command(
                 OUTPUT ${PATCHED_FILE}
                 COMMAND ${CMAKE_COMMAND} -E copy ${UNPATCHED_FILE} ${PATCHED_FILE}
-                COMMAND $<TARGET_FILE:nid_patcher> ${LIB_NAME} --preserve-exports "${LIBC_UNPATCHED}" "${PATCHED_FILE}"
+                COMMAND $<TARGET_FILE:nid_patcher> ${LIB_NAME} --preserve-exports "${LIBC_UNPATCHED}" ${PRESERVE_BRIDGE_EXPORTS} "${PATCHED_FILE}"
                 DEPENDS nid_patcher ${LIB_NAME} ${UNPATCHED_FILE} ${LIBC_UNPATCHED}
                 COMMENT "Patching NIDs for ${LIB_NAME}"
         )
