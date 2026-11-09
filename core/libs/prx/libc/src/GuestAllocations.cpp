@@ -325,22 +325,49 @@ void GuestAllocationsRemove_nid_postfix(void* mutation, const void* pointer) {
 
 namespace {
 
-std::map<std::uint64_t, std::shared_ptr<const Range>> replaceRange(const void* pointer, std::size_t bytes, bool remove, bool readable, bool writable) {
+using RangeMap = std::map<std::uint64_t, std::shared_ptr<const Range>>;
+
+// All allocation and validation happen before the OS callback. The staged map uses the
+// same allocator as the registry so committing node handles does not allocate.
+struct RangePlan {
+    RangeMap::iterator first, last;
+    RangeMap staged;
+
+    void Commit() noexcept {
+        auto& ranges = registry().ranges;
+        ranges.erase(first, last);
+        while (!staged.empty()) ranges.insert(staged.extract(staged.begin()));
+    }
+};
+
+RangePlan replaceRange(const void* pointer, std::size_t bytes, bool remove, bool readable, bool writable) {
     const auto address = reinterpret_cast<std::uintptr_t>(pointer);
     require(bytes != 0 && bytes <= std::numeric_limits<std::uint64_t>::max() - address, "invalid guest protection or unmap range");
     require(!writable || readable, "writable guest allocation must be readable");
     const auto end = address + bytes;
-    auto replacement = registry().ranges;
+    auto& ranges = registry().ranges;
+    auto first = ranges.upper_bound(address);
+    if (first != ranges.begin()) --first;
+    while (first != ranges.end() && first->first + first->second->bytes <= address) ++first;
+    auto last = first;
+    while (last != ranges.end() && last->first < end) ++last;
+    RangePlan plan{first, last, {}};
     auto cursor = address;
-    for (const auto& [base, entry] : registry().ranges) {
+    for (auto it = first; it != last; ++it) {
+        const auto& [base, entry] = *it;
         const auto& range = *entry;
         const auto finish = base + range.bytes;
         if (finish <= address) continue;
         if (base >= end) break;
         require(base <= cursor, "guest protection or unmap range has a hole");
-        replacement.erase(base);
         const auto insert = [&](std::uint64_t first, std::uint64_t last, bool canRead, bool canWrite) {
-            if (first < last) replacement.emplace(first, std::make_shared<const Range>(Range{first, static_cast<std::size_t>(last - first), canRead, canWrite, range.allocationAddress, range.allocationBytes, range.releasable}));
+            if (first >= last) return;
+            // Match map::emplace on the old full copy when an unaffected zero-size
+            // range already occupies the fragment's key.
+            const auto existing = ranges.find(first);
+            if (existing != ranges.end() && (existing->first < plan.first->first ||
+                                             (plan.last != ranges.end() && existing->first >= plan.last->first))) return;
+            plan.staged.emplace(first, std::make_shared<const Range>(Range{first, static_cast<std::size_t>(last - first), canRead, canWrite, range.allocationAddress, range.allocationBytes, range.releasable}));
         };
         insert(base, std::max(base, address), range.readable, range.writable);
         if (!remove) insert(std::max(base, address), std::min(finish, end), readable, writable);
@@ -348,7 +375,7 @@ std::map<std::uint64_t, std::shared_ptr<const Range>> replaceRange(const void* p
         cursor = std::min(finish, end);
     }
     require(cursor == end, "guest protection or unmap range is not registered");
-    return replacement;
+    return plan;
 }
 
 }
@@ -358,7 +385,7 @@ void GuestAllocationsProtect_nid_postfix(void* mutation, const void* pointer, st
     recordChange(mutation, pointer, bytes);
     auto replacement = replaceRange(pointer, bytes, false, readable, writable);
     apply();
-    registry().ranges.swap(replacement);
+    replacement.Commit();
 }
 
 void GuestAllocationsUnmap_nid_postfix(void* mutation, const void* pointer, std::size_t bytes, const std::function<void(const void*, std::size_t, const void*, bool)>& apply) {
@@ -384,11 +411,17 @@ void GuestAllocationsUnmap_nid_postfix(void* mutation, const void* pointer, std:
         const auto pieceEnd = std::min<std::uint64_t>(end, range.allocationAddress + range.allocationBytes);
         auto replacement = replaceRange(reinterpret_cast<const void*>(cursor), pieceEnd - cursor, true, false, false);
         bool last = true;
-        for (const auto& [base, entry] : replacement) {
-            if (entry->allocationAddress == range.allocationAddress) last = false;
+        // Releasable allocation fragments always remain inside their original
+        // allocation. Inspect only those nodes and the staged replacement.
+        for (auto it = registry().ranges.lower_bound(range.allocationAddress);
+             it != registry().ranges.end() && it->first < range.allocationAddress + range.allocationBytes; ++it) {
+            if (it->second->allocationAddress == range.allocationAddress &&
+                !(it->first < pieceEnd && it->first + it->second->bytes > cursor)) last = false;
         }
+        for (const auto& [base, entry] : replacement.staged)
+            if (entry->allocationAddress == range.allocationAddress) last = false;
         apply(reinterpret_cast<const void*>(cursor), pieceEnd - cursor, reinterpret_cast<const void*>(range.allocationAddress), last);
-        registry().ranges.swap(replacement);
+        replacement.Commit();
         any = true;
         cursor = pieceEnd;
     }
