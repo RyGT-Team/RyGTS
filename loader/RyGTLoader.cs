@@ -1410,6 +1410,62 @@ namespace RyGT
                 }) { IsBackground = true }.Start();
             };
             graphics.Controls.Add(xessDownload);
+            // FSR-212: AMD FSR 4 for Vulkan comes with AMD's FSR SDK 2.4 (FSR Upscaling 4.1.2, with
+            // the INT8 model for RX 6000 and RX 7000). Fetches AMD's signed loader and upscaler DLLs
+            // on request and installs them next to GTSport.exe only when AMD's signature is on them.
+            bool fsr4Installed = File.Exists(Path.Combine(root, "amd_fidelityfx_loader_vk.dll")) &&
+                                 File.Exists(Path.Combine(root, "amd_fidelityfx_upscaler_vk.dll"));
+            const string fsr4Label = "Download AMD FSR 4 (35 MB)";
+            var fsr4Download = new Button { Text = fsr4Installed ? "Reinstall AMD FSR 4" : fsr4Label, AutoSize = true, Margin = new Padding(22, 2, 0, 4) };
+            fsr4Download.Click += delegate
+            {
+                if (MessageBox.Show(this, "Download AMD FSR SDK 2.4.0 (FSR 4.1.2) from github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK and install amd_fidelityfx_loader_vk.dll and amd_fidelityfx_upscaler_vk.dll next to GTSport.exe? They use AMD's license terms. FSR 4 runs on Radeon RX 6000, RX 7000 and RX 9000 cards.",
+                                    "AMD FSR 4", MessageBoxButtons.OKCancel) != DialogResult.OK) return;
+                fsr4Download.Enabled = false;
+                fsr4Download.Text = "Downloading...";
+                new System.Threading.Thread(delegate ()
+                {
+                    string error = null;
+                    const string sdk = "https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/v2.4.0/";
+                    string temp = Path.Combine(Path.GetTempPath(), "RyGT-FSR4-" + Guid.NewGuid().ToString("N"));
+                    try
+                    {
+                        Directory.CreateDirectory(temp);
+                        System.Net.ServicePointManager.SecurityProtocol = System.Net.SecurityProtocolType.Tls12;
+                        var names = new[] { "amd_fidelityfx_loader_vk.dll", "amd_fidelityfx_upscaler_vk.dll" };
+                        using (var web = new System.Net.WebClient())
+                        {
+                            foreach (var name in names)
+                                web.DownloadFile(sdk + "Kits/FidelityFX/signedbin/" + name, Path.Combine(temp, name));
+                            web.DownloadFile(sdk + "Kits/FidelityFX/docs/license.md", Path.Combine(temp, "amd_fidelityfx_sdk-LICENSE.md"));
+                        }
+                        foreach (var name in names)
+                        {
+                            string subject;
+                            try { subject = System.Security.Cryptography.X509Certificates.X509Certificate.CreateFromSignedFile(Path.Combine(temp, name)).Subject; }
+                            catch { subject = ""; }
+                            if (subject.IndexOf("Advanced Micro Devices", StringComparison.OrdinalIgnoreCase) < 0)
+                                throw new Exception(name + " is not signed by AMD; nothing was installed.");
+                        }
+                        foreach (var name in names.Concat(new[] { "amd_fidelityfx_sdk-LICENSE.md" }))
+                            File.Copy(Path.Combine(temp, name), Path.Combine(root, name), true);
+                    }
+                    catch (Exception e) { error = e.Message; }
+                    try { Directory.Delete(temp, true); } catch { }
+                    BeginInvoke((Action)delegate
+                    {
+                        fsr4Download.Enabled = true;
+                        if (error != null)
+                        {
+                            fsr4Download.Text = fsr4Label;
+                            MessageBox.Show(this, "Could not install AMD FSR 4: " + error);
+                            return;
+                        }
+                        fsr4Download.Text = "Reinstall AMD FSR 4";
+                    });
+                }) { IsBackground = true }.Start();
+            };
+            graphics.Controls.Add(fsr4Download);
             // FSR-209: the upscaler's preset (GPU.upscale_ratio). GT Sport always renders the race at
             // 1920 x 1080, so a preset sets the output size as a multiple of it, which the picture
             // is then scaled to the window from (supersampling when the window is smaller). Each
@@ -1732,6 +1788,9 @@ namespace RyGT
                 catch (Exception e) { MessageBox.Show(this, "Could not save the setting: " + e.Message); }
             };
             row(upscalerCard, "Quality / Supersampling", quality);
+            // PERF-210: AMD Anti-Lag (VK_AMD_anti_lag; AMD GPUs whose driver has it). Frame
+            // generation paces its own frames, so Anti-Lag is off while it is on.
+            var antiLag = AddOption(upscalerCard, "", "GPU", "anti_lag", false);
             upscalerCard.Controls.Add(new Label { Text = "Sizes are for 1080p output. Scene scaling needs a game restart.", AutoSize = true, BackColor = Color.Transparent, ForeColor = Dark.DimText, Tag = "heading", Margin = new Padding(0, 2, 0, 4) });
 
             var frameCard = Section(right, "Frame generation");
@@ -1750,6 +1809,15 @@ namespace RyGT
                 dlssg.Checked = frames.SelectedIndex == 2;
             };
             row(frameCard, "Frame generation", frames);
+            Action updateAntiLag = delegate
+            {
+                bool generated = frames.SelectedIndex != 0;
+                antiLag.Enabled = !generated;
+                antiLag.Text = generated ? "AMD Anti-Lag (off while frame generation is on)"
+                                         : "AMD Anti-Lag: lower input lag (AMD GPUs)";
+            };
+            frames.SelectedIndexChanged += delegate { updateAntiLag(); };
+            updateAntiLag();
 
             var sharpenCard = Section(right, "Sharpening");
             // FSR's attenuation is 0 (sharpest) to 2 in thousandths; 0% turns the pass off.
@@ -1769,7 +1837,7 @@ namespace RyGT
 
             var librariesCard = Section(right, "Libraries");
             var libraries = new FlowLayoutPanel { AutoSize = true, BackColor = Color.Transparent, FlowDirection = FlowDirection.TopDown, WrapContents = false };
-            foreach (var button in new[] { xessDownload, nvidiaDownload, addDlss })
+            foreach (var button in new[] { xessDownload, fsr4Download, nvidiaDownload, addDlss })
             {
                 button.Margin = new Padding(0, 2, 8, 4);
                 libraries.Controls.Add(button);
@@ -3409,7 +3477,11 @@ namespace RyGT
                         ShowSetupDumpHelp(failure);
                         return;
                     }
-                    StartGame(root, settings.HddStreaming, experimentalSceneSize);
+                    // PERF-210: Anti-Lag only without frame generation (FSR or DLSS).
+                    bool antiLag = ReadSetting("GPU", "anti_lag", false) &&
+                                   !ReadSetting("GPU", "framegen_enabled", false) &&
+                                   !ReadSetting("GPU", "dlssg_enabled", false);
+                    StartGame(root, settings.HddStreaming, experimentalSceneSize, antiLag);
                     status.Text = "GT Sport is starting. Logs: logs\\stdout.log and logs\\stderr.log.";
                 }));
             });
@@ -3419,7 +3491,7 @@ namespace RyGT
 
         /// Starts GTSport.exe with session log rotation and waits for GPU recovery if Vulkan loses
         /// its device.
-        static void StartGame(string root, bool hddStreaming, Size? sceneSize)
+        static void StartGame(string root, bool hddStreaming, Size? sceneSize, bool antiLag)
         {
             string exe = Path.Combine(root, "GTSport.exe");
             // Preserve GT Sport metadata while migrating the launcher publisher field from older installs.
@@ -3451,6 +3523,7 @@ namespace RyGT
                         RenderResolution.ConfigureStart(start, root, sceneSize);
                         start.EnvironmentVariables["RYGT_LOG_DIRECTORY"] = logDirectory;
                         start.EnvironmentVariables["RYGT_HDD_STREAMING"] = hddStreaming ? "1" : "0";
+                        start.EnvironmentVariables["RYGT_ANTI_LAG"] = antiLag ? "1" : "0"; // PERF-210
                         started = Process.Start(start);
                     }
                     catch (Exception e)

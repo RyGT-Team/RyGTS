@@ -1,3 +1,6 @@
+#include <cstdio>
+#include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstddef>
 #include <limits>
@@ -72,9 +75,50 @@ static std::int64_t NativePositioned(int descriptor, void* buf, std::size_t nbyt
             OVERLAPPED at = overlapped;
             DWORD got = 0;
             if (::ReadFile(handle, target, static_cast<DWORD>(nbytes), &got, &at)) return got;
-            if (::GetLastError() == ERROR_HANDLE_EOF) return 0;
-            errno = EIO;
-            return -1;
+            DWORD error = ::GetLastError();
+            if (error == ERROR_HANDLE_EOF) return 0;
+            // FIX-GTS-READ-001: under memory pressure (right after the GPU ran out of video
+            // memory in a race) Windows refused one large read with "insufficient system
+            // resources", and the EIO it became aborted GT Sport. Read it again in 8 MB pieces,
+            // retrying those resource errors briefly.
+            constexpr std::uint64_t Piece = 8ull << 20;
+            std::uint64_t total = 0;
+            for (int attempt = 0; total < nbytes && attempt < 50;) {
+                const std::uint64_t position = static_cast<std::uint64_t>(offset) + total;
+                OVERLAPPED piece_at{};
+                piece_at.Offset = static_cast<DWORD>(position);
+                piece_at.OffsetHigh = static_cast<DWORD>(position >> 32u);
+                const DWORD want = static_cast<DWORD>(std::min<std::uint64_t>(Piece, nbytes - total));
+                DWORD piece_got = 0;
+                if (::ReadFile(handle, static_cast<char*>(target) + total, want, &piece_got, &piece_at)) {
+                    total += piece_got;
+                    if (piece_got < want) break; // end of file
+                    continue;
+                }
+                error = ::GetLastError();
+                if (error == ERROR_HANDLE_EOF) break;
+                if (error != ERROR_NO_SYSTEM_RESOURCES && error != ERROR_WORKING_SET_QUOTA &&
+                    error != ERROR_NOT_ENOUGH_MEMORY && error != ERROR_NOT_ENOUGH_QUOTA) {
+                    std::fprintf(stderr, "[file] read of %zu bytes at %lld failed: Windows error %lu\n",
+                                 nbytes, static_cast<long long>(offset), error);
+                    errno = EIO;
+                    return -1;
+                }
+                ++attempt;
+                ::Sleep(20);
+            }
+            if (total < nbytes && error != ERROR_HANDLE_EOF && total == 0) {
+                std::fprintf(stderr, "[file] read of %zu bytes at %lld failed after retries: Windows error %lu\n",
+                             nbytes, static_cast<long long>(offset), error);
+                errno = EIO;
+                return -1;
+            }
+            static std::atomic<unsigned> logged{0};
+            if (logged.fetch_add(1) < 10) {
+                std::fprintf(stderr, "[file] FIX-GTS-READ-001: %zu-byte read refused (Windows error %lu); read in pieces\n",
+                             nbytes, error);
+            }
+            return static_cast<std::int64_t>(total);
         });
     }
     if (!::WriteFile(handle, buf, static_cast<DWORD>(nbytes), &done, &overlapped)) {
