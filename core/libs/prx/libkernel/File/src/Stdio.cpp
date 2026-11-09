@@ -77,6 +77,11 @@ static std::int64_t NativePositioned(int descriptor, void* buf, std::size_t nbyt
             if (::ReadFile(handle, target, static_cast<DWORD>(nbytes), &got, &at)) return got;
             DWORD error = ::GetLastError();
             if (error == ERROR_HANDLE_EOF) return 0;
+            if (error != ERROR_NO_SYSTEM_RESOURCES && error != ERROR_WORKING_SET_QUOTA &&
+                error != ERROR_NOT_ENOUGH_MEMORY && error != ERROR_NOT_ENOUGH_QUOTA) {
+                errno = EIO;
+                return -1;
+            }
             // FIX-GTS-READ-001: under memory pressure (right after the GPU ran out of video
             // memory in a race) Windows refused one large read with "insufficient system
             // resources", and the EIO it became aborted GT Sport. Read it again in 8 MB pieces,
