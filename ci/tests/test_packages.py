@@ -197,14 +197,14 @@ class PackageTests(unittest.TestCase):
         self.assertIn('compile_commands.json', build)
         self.assertIn('without NDEBUG', build)
 
-    def test_split_workflow_templates_resolve_and_publish_one_channel_each(self):
+    def test_split_workflow_templates_resolve_and_verify_one_channel_each(self):
         release = (ROOT / 'ci/github-registry/ci-package-release.yml').read_text(encoding='utf-8')
         debug = (ROOT / 'ci/github-registry/ci-package-debug.yml').read_text(encoding='utf-8')
         for workflow, channel in ((release, 'ci'), (debug, 'debug-ci')):
             self.assertIn(f'CI_CHANNEL: {channel}', workflow)
             self.assertIn('python3 ci/github-registry/registry_ci.py resolve', workflow)
             self.assertIn('python3 ci/package.py', workflow)
-            self.assertIn('python3 ci/github-registry/registry_ci.py publish', workflow)
+            self.assertIn('python3 ci/github-registry/registry_ci.py verify', workflow)
             self.assertIn('workflow_dispatch:', workflow)
             self.assertNotIn('schedule:', workflow)
             self.assertIn('push:', workflow)
