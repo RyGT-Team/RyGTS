@@ -15,6 +15,11 @@ constexpr std::uint16_t VendorLogitech = 0x046D;
 constexpr std::uint16_t VendorFanatec = 0x0EB7;
 constexpr std::uint16_t VendorMoza = 0x346E;
 constexpr std::uint16_t VendorThrustmaster = 0x044F;
+// Simagic's Alpha EVO bases (3670:0500-0502; 0500 is the Alpha EVO Sport). SDL's own wheel list
+// only has the older Simagic bases (0483:0522). Not the whole vendor: 0x3670 also covers Simagic's
+// pedals and shifters.
+constexpr std::uint16_t VendorSimagic = 0x3670;
+constexpr std::array SimagicEvoWheels{std::uint16_t{0x0500}, std::uint16_t{0x0501}, std::uint16_t{0x0502}};
 
 // Logitech wheels in PlayStation mode (G29, G923 PS, G27, G25, Driving Force GT, G PRO PS).
 constexpr std::array LogitechPlayStationWheels{
@@ -97,6 +102,7 @@ bool WheelInput::IsWheel(int deviceIndex) {
     const std::uint16_t vendor = SDL_JoystickGetDeviceVendor(deviceIndex);
     const std::uint16_t product = SDL_JoystickGetDeviceProduct(deviceIndex);
     return vendor == VendorMoza || vendor == VendorFanatec || isLogitechWheel(vendor, product) ||
+           (vendor == VendorSimagic && contains(SimagicEvoWheels, product)) ||
            isThrustmasterWheel(vendor, SDL_JoystickGetDeviceType(deviceIndex));
 }
 

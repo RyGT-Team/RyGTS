@@ -74,6 +74,9 @@ namespace Pad {
 void StartWheel();
 void ApplyWheel(PadInputState& state);
 WheelState ReadWheel();
+// The wheel position (-32768..32767) as the game expects it: scaled from the configured rotation
+// to the lock the game set for the current car (if any), and clamped at that lock.
+int SteeringForGame(int steering);
 // While the title has the wheel open as a steering wheel, its L1/R1 (the G29's shift paddles)
 // belong to the wheel alone; on the ordinary pad they would also move the camera.
 void SetWheelOpened(bool opened);
@@ -106,6 +109,9 @@ struct WheelSettings {
     // the title only turns on its wheel mode (and force feedback) for such a pad. Off by
     // default: in that mode the paddles do not shift yet.
     bool padIsWheel = false;
+    // Scale the steering to the lock the game asks for per car (the G29's range command), as a
+    // real wheel does on a PS4. 0 reports the whole configured rotation for every car.
+    bool carLock = true;
 };
 const WheelSettings& Wheel();
 

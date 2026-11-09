@@ -1,5 +1,6 @@
 #include "prx/libScePad/include/PadState.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -32,6 +33,16 @@ std::atomic<bool> ready{false};
 // When the wheel thread started; titles ask for a wheel during the first seconds after that.
 std::atomic<std::int64_t> startedAt{0};
 std::atomic<bool> wheelOpened{false};
+// Lock to lock in degrees that the game asked the wheel for (per car), 0 until it does.
+std::atomic<int> gameRange{0};
+
+// f8 81 <range low> <range high>, sent by both the G29 and the Fanatec drivers: the steering lock
+// the game wants for this car, in degrees.
+void SetGameRange(int range) {
+    if (range >= 40 && range <= 1080 && gameRange.exchange(range) != range) {
+        APS5_LOG_OUT("Pad: game set the wheel range to %d degrees", range);
+    }
+}
 
 // The G29's four effect slots, as set by the title's Logitech classic force-feedback commands
 // (byte 0: slot mask << 4 | operation; byte 1: effect type; bytes 2-7: parameters).
@@ -116,6 +127,7 @@ void FanatecReport(const std::uint8_t* report, std::size_t length) {
         if (news) LogFanatec(r, stop ? " (stop)" : "");
     } else {
         LogFanatec(r, first == 0xf8 ? " (extended)" : " (not handled)");
+        if (first == 0xf8 && c[1] == 0x81) SetGameRange(c[2] | (c[3] << 8));
     }
     static int updates = 0;
     if (++updates % 2000 == 0) {
@@ -247,6 +259,7 @@ void WheelReport(const std::uint8_t* report, std::size_t length) {
         const std::uint8_t first = c[0];
         if (first == 0xf8) {
             LogCommand(c, c[1] == 0x81 ? " (wheel range)" : c[1] == 0x12 ? " (leds)" : " (extended)");
+            if (c[1] == 0x81) SetGameRange(c[2] | (c[3] << 8));
             continue;
         }
         if (first == 0xf5) { autocenter = false; LogCommand(c, " (autocenter off)"); continue; }
@@ -305,6 +318,17 @@ WheelState ReadWheel() {
     return {};
 }
 
+int SteeringForGame(int steering) {
+    const auto& settings = Wheel();
+    const int range = gameRange.load();
+    if (!settings.carLock || range <= 0 || range >= settings.rotation) return steering;
+    // The wheel turns `rotation` degrees lock to lock but the car only `range`: report the same
+    // angle on the game's narrower scale, so the wheel on screen follows the real one 1:1 and
+    // stops at the car's lock.
+    const long long scaled = static_cast<long long>(steering) * settings.rotation / range;
+    return static_cast<int>(std::clamp<long long>(scaled, -32768, 32767));
+}
+
 bool WaitForWheel(int milliseconds) {
     // Windows reports a wheel a moment after the joystick subsystem starts, so the first sample
     // can come before it. Wait for a wheel itself, but only until the given time after startup,
@@ -342,6 +366,7 @@ const WheelSettings& Wheel() {
             else if (key == "angleunit") result.angleRadians = value == "rad" || value == "radians";
             else if (key == "ffbgain") result.ffbGain = std::atoi(value.c_str());
             else if (key == "padiswheel") result.padIsWheel = std::atoi(value.c_str()) != 0;
+            else if (key == "carlock") result.carLock = std::atoi(value.c_str()) != 0;
             else if (key == "ffbinvert") result.ffbInvert = std::atoi(value.c_str()) != 0;
             else if (key == "ffbdamping") result.ffbDamping = std::clamp(std::atoi(value.c_str()), 0, 100);
             else if (key == "ffbdetail") result.ffbDetail = std::clamp(std::atoi(value.c_str()), 0, 200);

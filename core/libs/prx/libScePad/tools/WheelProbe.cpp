@@ -33,6 +33,7 @@ bool IsWheel(int index) {
     const Uint16 vendor = SDL_JoystickGetDeviceVendor(index);
     const Uint16 product = SDL_JoystickGetDeviceProduct(index);
     if (vendor == 0x346E || vendor == 0x0EB7) return true;
+    if (vendor == 0x3670 && product >= 0x0500 && product <= 0x0502) return true; // Simagic Alpha EVO
     if (vendor == 0x044F) { // Thrustmaster, but not its gamepads, flight sticks and throttles
         const SDL_JoystickType type = SDL_JoystickGetDeviceType(index);
         if (type != SDL_JOYSTICK_TYPE_GAMECONTROLLER && type != SDL_JOYSTICK_TYPE_FLIGHT_STICK &&
