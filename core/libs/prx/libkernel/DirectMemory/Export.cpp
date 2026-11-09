@@ -46,6 +46,7 @@ struct BatchMapTrace {
  }
  explicit BatchMapTrace(int count, int batch_flags) : requested(count), flags(batch_flags) {
 #ifdef _WIN32
+  if (count==0) return;
   static const bool enabled=[] { const char* e=std::getenv("RYGT_BATCH_MAP_TRACE"); return e && e[0]=='1' && e[1]=='\0'; }();
   if (!enabled) return;
   char path[128]; std::snprintf(path,sizeof(path),"logs/batch-map-%lu.capture",GetCurrentProcessId());

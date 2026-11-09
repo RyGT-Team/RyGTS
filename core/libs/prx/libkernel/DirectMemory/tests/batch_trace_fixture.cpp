@@ -33,6 +33,7 @@ int main() {
  int processed=-1;
  assert(sceKernelBatchMap2(entries,3,&processed,0)==0 && processed==3 && calls==3);
  FILE* marker_file=std::fopen(marker,"w"); assert(marker_file); std::fclose(marker_file);
+ for (int i=0;i<300;++i) { processed=-1; assert(sceKernelBatchMap2(entries,0,&processed,0)==0 && processed==0 && calls==3); }
  SYSTEM_INFO info{}; GetSystemInfo(&info);
  auto* pages=static_cast<char*>(VirtualAlloc(nullptr,2*info.dwPageSize,MEM_COMMIT|MEM_RESERVE,PAGE_READWRITE)); assert(pages);
  auto* guarded=reinterpret_cast<KernelBatchMapEntry*>(pages+info.dwPageSize-sizeof(void*));
