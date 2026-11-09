@@ -13,19 +13,10 @@ on:
         type: string
         required: false
         default: ''
-      force:
-        type: boolean
-        required: false
-        default: false
     secrets:
       GITLAB_PACKAGE_TOKEN:
-        required: true
+        required: false
   workflow_dispatch:
-    inputs:
-      force:
-        description: Rebuild even if this commit is already packaged
-        type: boolean
-        default: false
 permissions:
   contents: read
 concurrency:
@@ -54,7 +45,6 @@ jobs:
         env:
           SOURCE_OVERRIDE_SHA: ${{ steps.controller.outputs.commit }}
           RENDERER_OVERRIDE_SHA: ${{ inputs.renderer_sha }}
-          FORCE_BUILD: ${{ inputs.force }}
         run: python3 ci/github-registry/registry_ci.py resolve ci
   windows:
     needs: [source, tests]
@@ -69,7 +59,7 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.12'
-      - name: Fetch exact GitLab source
+      - name: Fetch exact GitHub source
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -78,9 +68,9 @@ jobs:
           Set-Location $env:RYGT_CI_ROOT
           git init
           git config core.longpaths true
-          git remote add origin https://gitlab.com/rygt-team/RyGTS.git
+          git remote add origin https://github.com/RyGT-Team/RyGTS.git
           git fetch --depth=1 origin $env:SOURCE_SHA
-          if ($LASTEXITCODE) { throw 'GitLab fetch failed' }
+          if ($LASTEXITCODE) { throw 'GitHub fetch failed' }
           git checkout --detach FETCH_HEAD
           if ($LASTEXITCODE -or (git rev-parse HEAD) -cne $env:SOURCE_SHA) { throw 'Source mismatch' }
       - name: Build Release launcher and renderer
@@ -109,13 +99,13 @@ jobs:
       SOURCE_SHA: ${{ needs.source.outputs.commit }}
       RENDERER_SHA: ${{ needs.source.outputs.renderer_commit }}
     steps:
-      - name: Fetch exact GitLab source
+      - name: Fetch exact GitHub source
         run: |
           set -euo pipefail
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           git init source
           cd source
-          git remote add origin https://gitlab.com/rygt-team/RyGTS.git
+          git remote add origin https://github.com/RyGT-Team/RyGTS.git
           git fetch --depth=1 origin "$SOURCE_SHA"
           git checkout --detach FETCH_HEAD
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
@@ -147,13 +137,13 @@ jobs:
           repository: RyGT-Team/RyGTS
           ref: ${{ needs.source.outputs.controller_commit }}
           persist-credentials: false
-      - name: Fetch exact GitLab source
+      - name: Fetch exact GitHub source
         run: |
           set -euo pipefail
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           git init source
           cd source
-          git remote add origin https://gitlab.com/rygt-team/RyGTS.git
+          git remote add origin https://github.com/RyGT-Team/RyGTS.git
           git fetch --depth=1 origin "$SOURCE_SHA"
           git checkout --detach FETCH_HEAD
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
@@ -168,7 +158,10 @@ jobs:
           CI_PIPELINE_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
           CI_CHANNEL: ci
         run: python3 ci/package.py
+      - name: Verify package provenance and checksum
+        run: python3 ci/github-registry/registry_ci.py verify ci
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        id: package_artifact
         with:
           name: ci-${{ needs.source.outputs.commit }}-renderer-${{ needs.source.outputs.renderer_commit }}
           path: |
@@ -177,13 +170,18 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        id: manifest_artifact
         with:
           name: package-manifest-release-${{ needs.source.outputs.commit }}-renderer-${{ needs.source.outputs.renderer_commit }}
           path: source/dist/CI-PACKAGES.json
           if-no-files-found: error
           retention-days: 7
-      - name: Publish ci package to GitLab
+      - name: Summarize artifacts
         env:
-          GITLAB_PACKAGE_TOKEN: ${{ secrets.GITLAB_PACKAGE_TOKEN }}
-          CI_CHANNEL: ci
-        run: python3 ci/github-registry/registry_ci.py publish ci
+          PACKAGE_URL: ${{ steps.package_artifact.outputs.artifact-url }}
+          MANIFEST_URL: ${{ steps.manifest_artifact.outputs.artifact-url }}
+        run: |
+          echo "### CI artifacts" >> "$GITHUB_STEP_SUMMARY"
+          echo "[Package and checksum]($PACKAGE_URL) | [Manifest]($MANIFEST_URL)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Source: [${SOURCE_SHA}](https://github.com/RyGT-Team/RyGTS/commit/${SOURCE_SHA})" >> "$GITHUB_STEP_SUMMARY"
+          echo "Renderer: [${RENDERER_SHA}](https://github.com/RyGT-Team/shadGT/commit/${RENDERER_SHA})" >> "$GITHUB_STEP_SUMMARY"

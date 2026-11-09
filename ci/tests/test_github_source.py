@@ -14,13 +14,21 @@ spec.loader.exec_module(source)
 SHA='a'*40
 
 class GitHubSourceTests(unittest.TestCase):
-    def test_exact_revision_waits_for_relay(self):
+    def test_package_workflows_fetch_only_github_runtime(self):
+        root = HERE.parent
+        for folder in (root / '.github/workflows', HERE / 'github-registry'):
+            for channel in ('release', 'debug'):
+                workflow = (folder / ('ci-package-' + channel + '.yml')).read_text()
+                self.assertEqual(workflow.count('git remote add origin https://github.com/RyGT-Team/RyGTS.git'), 3)
+                self.assertNotIn('gitlab.com/rygt-team/RyGTS.git', workflow)
+
+    def test_exact_revision_waits_for_github(self):
         missing=urllib.error.HTTPError('url',404,'Not Found',{},None)
-        response=io.BytesIO(json.dumps({'id':SHA}).encode())
+        response=io.BytesIO(json.dumps({'sha':SHA}).encode())
         with patch.object(source.urllib.request,'urlopen',side_effect=[missing,response]) as get, patch.object(source.time,'sleep') as sleep:
-            self.assertEqual(source.wait_for_commit('https://gitlab.test/api',SHA,attempts=2),SHA)
+            self.assertEqual(source.wait_for_commit('https://api.github.com/repos/RyGT-Team/RyGTS',SHA,attempts=2),SHA)
         self.assertEqual(get.call_count,2)
-        self.assertTrue(get.call_args.args[0].endswith('/repository/commits/'+SHA))
+        self.assertTrue(get.call_args.args[0].endswith('/commits/'+SHA))
         sleep.assert_called_once_with(5)
     def test_bad_revision_never_fetches(self):
         with patch.object(source.urllib.request,'urlopen') as get:
@@ -30,7 +38,7 @@ class GitHubSourceTests(unittest.TestCase):
     def test_missing_revision_does_not_fall_back(self):
         missing=urllib.error.HTTPError('url',404,'Not Found',{},None)
         with patch.object(source.urllib.request,'urlopen',side_effect=missing), patch.object(source.time,'sleep'):
-            with self.assertRaisesRegex(RuntimeError,'did not deliver'):source.wait_for_commit('api',SHA,attempts=1)
+            with self.assertRaisesRegex(RuntimeError,'did not provide'):source.wait_for_commit('api',SHA,attempts=1)
     def test_auth_failure_is_not_retried(self):
         denied=urllib.error.HTTPError('url',403,'Forbidden',{},None)
         with patch.object(source.urllib.request,'urlopen',side_effect=denied) as get, patch.object(source.time,'sleep') as sleep:
@@ -38,6 +46,6 @@ class GitHubSourceTests(unittest.TestCase):
             self.assertEqual(get.call_count,1)
             sleep.assert_not_called()
     def test_wrong_commit_is_rejected(self):
-        response=io.BytesIO(json.dumps({'id':'b'*40}).encode())
+        response=io.BytesIO(json.dumps({'sha':'b'*40}).encode())
         with patch.object(source.urllib.request,'urlopen',return_value=response):
             with self.assertRaises(ValueError):source.wait_for_commit('api',SHA)
