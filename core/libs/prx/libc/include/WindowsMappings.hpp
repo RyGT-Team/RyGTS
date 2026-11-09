@@ -214,14 +214,21 @@ public:
         SYSTEM_INFO system{};
         GetSystemInfo(&system);
         for (std::size_t done = 0; done < bytes; done += pageBytes, ++view) {
-            const auto bad = [&](const char* reason) {
+            if (view == views.end() || view->first != address + done) {
                 char text[128];
-                std::snprintf(text, sizeof(text), "%s at offset 0x%llx", reason, static_cast<unsigned long long>(done));
-                return refuse(text);
-            };
-            if (view == views.end() || view->first != address + done) throw bad("view gap");
-            if (view->second.offset != offset + done) throw bad("section offset discontinuity");
-            if (view->second.section != section && !sameSection(view->second.section->handle, section->handle)) throw bad("different section");
+                std::snprintf(text, sizeof(text), "view gap at offset 0x%llx", static_cast<unsigned long long>(done));
+                throw refuse(text);
+            }
+            if (view->second.offset != offset + done) {
+                char text[128];
+                std::snprintf(text, sizeof(text), "section offset discontinuity at offset 0x%llx", static_cast<unsigned long long>(done));
+                throw refuse(text);
+            }
+            if (view->second.section != section && !sameSection(view->second.section->handle, section->handle)) {
+                char text[128];
+                std::snprintf(text, sizeof(text), "different section at offset 0x%llx", static_cast<unsigned long long>(done));
+                throw refuse(text);
+            }
         }
         const auto lead = offset % system.dwAllocationGranularity;
         void* alias = map(section->handle, GetCurrentProcess(), nullptr, offset - lead, lead + bytes, 0, PAGE_READWRITE, nullptr, 0);
