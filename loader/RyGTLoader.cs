@@ -1167,6 +1167,7 @@ namespace RyGT
         public string Game = "", Update = "", Modules = "", Fonts = "";
         public string StdoutLevel = "Warning";
         public bool HddStreaming = false;
+        public bool ShowAdvanced = true; // FEAT-GTS-438: the Advanced tab and its quick access entry
         public List<EnvVar> Env = new List<EnvVar>(); // FEAT-GTS-433
         readonly string path;
 
@@ -1191,12 +1192,13 @@ namespace RyGT
                 else if (key == "fonts") Fonts = value;
                 else if (key == "stdout_level") StdoutLevel = LogFiles.Levels[LogFiles.LevelIndex(value)];
                 else if (key == "hdd_streaming") HddStreaming = value == "1" || value.Equals("true", StringComparison.OrdinalIgnoreCase);
+                else if (key == "show_advanced") ShowAdvanced = !(value == "0" || value.Equals("false", StringComparison.OrdinalIgnoreCase));
             }
         }
 
         public void Save()
         {
-            var lines = new List<string> { "game=" + Game, "update=" + Update, "modules=" + Modules, "fonts=" + Fonts, "stdout_level=" + StdoutLevel, "hdd_streaming=" + (HddStreaming ? "1" : "0") };
+            var lines = new List<string> { "game=" + Game, "update=" + Update, "modules=" + Modules, "fonts=" + Fonts, "stdout_level=" + StdoutLevel, "hdd_streaming=" + (HddStreaming ? "1" : "0"), "show_advanced=" + (ShowAdvanced ? "1" : "0") };
             foreach (var entry in Env) lines.Add("env=" + CustomEnvironment.Format(entry));
             File.WriteAllLines(path, lines);
         }
@@ -1220,6 +1222,7 @@ namespace RyGT
         readonly Button[] tabs = new Button[4];
         volatile bool busy;
         Action<bool> showGraphics;
+        Action<bool> showAdvanced; // FEAT-GTS-438
 
         public LoaderForm()
         {
@@ -2017,6 +2020,19 @@ namespace RyGT
             logging.Controls.Add(logLevel);
             logging.Controls.Add(new Label { Text = "Selected level and below, on the next launch.\nAll logs are in the logs folder; previous logs are timestamped.",
                 AutoSize = true, MaximumSize = new Size(360, 0), BackColor = Color.Transparent, Margin = new Padding(0, 4, 0, 0) });
+            // FEAT-GTS-438: the Advanced page (experimental renderer switches) only for those who want it.
+            var advancedShown = new DarkCheckBox { Text = "Show the Advanced page (experimental renderer switches)", AutoSize = true,
+                Checked = settings.ShowAdvanced, Margin = new Padding(0, 10, 0, 2) };
+            advancedShown.CheckedChanged += delegate
+            {
+                settings.ShowAdvanced = advancedShown.Checked;
+                if (showAdvanced != null) showAdvanced(advancedShown.Checked);
+                try { settings.Save(); }
+                catch (Exception e) { MessageBox.Show(this, "Could not save the setting: " + e.Message); }
+            };
+            logging.Controls.Add(advancedShown);
+            logging.Controls.Add(new Label { Text = "Hiding it keeps the switches already set there; they still apply when the game starts.",
+                AutoSize = true, MaximumSize = new Size(360, 0), ForeColor = Color.Silver, BackColor = Color.Transparent, Margin = new Padding(0, 2, 0, 0) });
             batchRow.Controls.Add(batch);
             shaders.Controls.Add(batchRow);
             batch.Enabled = mode.SelectedIndex == 0;
@@ -2096,7 +2112,18 @@ namespace RyGT
             side.Controls.Add(Item("Display", "Screen, resolution, refresh rate", "D", Badges[3], delegate { ShowPage(1); showGraphics(true); }));
             side.Controls.Add(Item("Graphics", "FSR, DLSS, frame generation", "G", Badges[4], delegate { ShowPage(1); showGraphics(true); }));
             side.Controls.Add(Item("Shaders", "Precompiling and compile pauses", "S", Badges[5], delegate { ShowPage(1); showGraphics(false); }));
-            side.Controls.Add(Item("Advanced", "Experimental renderer switches", "A", Badges[8], delegate { ShowPage(3); }));
+            var advancedItem = Item("Advanced", "Experimental renderer switches", "A", Badges[8], delegate { ShowPage(3); });
+            side.Controls.Add(advancedItem);
+            showAdvanced = delegate (bool on)
+            {
+                WithoutRedraw(delegate
+                {
+                    tabs[3].Visible = on;
+                    advancedItem.Visible = on;
+                });
+                if (!on && pages[3].Visible) ShowPage(1); // hidden while open: back to Settings
+            };
+            showAdvanced(settings.ShowAdvanced);
             side.Controls.Add(GroupLabel("Game"));
             side.Controls.Add(Item("Set up", "Convert the game from your dump", "U", Badges[6], delegate { if (setup.Enabled) StartSetup(); }));
             side.Controls.Add(Item("Open folder", "The RyGTS folder in Explorer", "F", Badges[7], OpenFolder));
