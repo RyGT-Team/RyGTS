@@ -265,6 +265,24 @@ namespace RyGT
                 g.FillPath(brush, path);
         }
 
+        /// Bumped when the window's picture is rebuilt (a new size), so cached card pictures redraw.
+        public static int BackdropVersion;
+
+        /// Copies the part of `picture` being painted, unscaled; `offset` is where the painted control
+        /// sits in the picture.
+        public static void CopyArea(Bitmap picture, Point offset, Graphics g)
+        {
+            var area = Rectangle.Intersect(Rectangle.Ceiling(g.ClipBounds), new Rectangle(-offset.X, -offset.Y, picture.Width, picture.Height));
+            if (area.Width <= 0 || area.Height <= 0) return;
+            var mode = g.CompositingMode;
+            var interpolation = g.InterpolationMode;
+            g.CompositingMode = CompositingMode.SourceCopy;
+            g.InterpolationMode = InterpolationMode.NearestNeighbor;
+            g.DrawImage(picture, area, new Rectangle(area.X + offset.X, area.Y + offset.Y, area.Width, area.Height), GraphicsUnit.Pixel);
+            g.CompositingMode = mode;
+            g.InterpolationMode = interpolation;
+        }
+
         /// Paints what lies under `control`: the banner picture, or the nearest opaque parent's color.
         public static void PaintUnder(Control control, Graphics g)
         {
@@ -275,7 +293,7 @@ namespace RyGT
                 var hero = parent as Hero;
                 if (hero != null) { hero.DrawUnder(control, g); FillGlass(glass, control, g); return; }
                 var card = parent as Card;
-                if (card != null && card.Fill.A < 255) { glass.Add(card); continue; }
+                if (card != null) { card.DrawUnder(control, g); FillGlass(glass, control, g); return; } // PERF-GTS-436
                 var backdrop = parent as IBackdrop;
                 if (backdrop != null && backdrop.DrawBackdrop(control, g, false)) { FillGlass(glass, control, g); return; }
                 if (parent.BackColor.A == 255)
@@ -504,6 +522,37 @@ namespace RyGT
         }
     }
 
+    /// PERF-GTS-436: a scrolling page that redraws once per step. Windows' own scrolling copies the
+    /// old pixels and then repaints, but the see-through rows sit on the window's picture, which does
+    /// not scroll, so the copy is wrong and the cards flicker or double. Here a wheel or scroll bar
+    /// step moves the controls with drawing off and then paints the page and everything on it once,
+    /// through the window's off-screen buffer (WS_EX_COMPOSITED).
+    class ScrollPage : TableLayoutPanel
+    {
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        static extern bool RedrawWindow(IntPtr window, IntPtr update, IntPtr region, uint flags);
+
+        protected override void WndProc(ref Message m)
+        {
+            const int WM_SETREDRAW = 0x000B, WM_VSCROLL = 0x0115, WM_MOUSEWHEEL = 0x020A;
+            if ((m.Msg != WM_MOUSEWHEEL && m.Msg != WM_VSCROLL) || !IsHandleCreated || !Visible)
+            {
+                base.WndProc(ref m);
+                return;
+            }
+            SendMessage(Handle, WM_SETREDRAW, IntPtr.Zero, IntPtr.Zero);
+            try { base.WndProc(ref m); }
+            finally
+            {
+                SendMessage(Handle, WM_SETREDRAW, new IntPtr(1), IntPtr.Zero);
+                const uint RDW_INVALIDATE = 0x1, RDW_ERASE = 0x4, RDW_ALLCHILDREN = 0x80, RDW_UPDATENOW = 0x100, RDW_FRAME = 0x400;
+                RedrawWindow(Handle, IntPtr.Zero, IntPtr.Zero, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW | RDW_FRAME);
+            }
+        }
+    }
+
     /// A rounded panel with a thin border; the controls on it take its color.
     class Card : TableLayoutPanel
     {
@@ -522,17 +571,53 @@ namespace RyGT
             ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         }
 
+        // PERF-GTS-436: WinForms paints a see-through label or row by painting its parent card under
+        // it first, so a card was drawn again (picture, glass, rounded border) for every row on it,
+        // several times per scroll step. The card is drawn once into this picture, kept until it
+        // moves in the window, changes size or the window's picture changes; the repaints copy it.
+        Bitmap look;
+        Point lookAt;
+        int lookVersion;
+
+        Bitmap Look()
+        {
+            var form = FindForm();
+            var at = form != null ? form.PointToClient(PointToScreen(Point.Empty)) : Point.Empty;
+            if (look != null && look.Size == Size && lookAt == at && lookVersion == Dark.BackdropVersion) return look;
+            if (look != null) look.Dispose();
+            look = new Bitmap(Math.Max(1, Width), Math.Max(1, Height), System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+            using (var g = Graphics.FromImage(look))
+            {
+                Dark.PaintUnder(this, g);
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                var r = new RectangleF(0.5f, 0.5f, Width - 1f, Height - 1f);
+                using (var path = Dark.RoundedRect(r, Radius))
+                {
+                    using (var fill = new SolidBrush(Fill)) g.FillPath(fill, path);
+                    if (!Edge.IsEmpty) using (var pen = new Pen(Edge)) g.DrawPath(pen, path);
+                }
+            }
+            lookAt = at;
+            lookVersion = Dark.BackdropVersion;
+            return look;
+        }
+
+        /// The card as it lies under `control` (the card itself or a control on it).
+        public void DrawUnder(Control control, Graphics g)
+        {
+            var offset = control == this ? Point.Empty : PointToClient(control.PointToScreen(Point.Empty));
+            Dark.CopyArea(Look(), offset, g);
+        }
+
         protected override void OnPaintBackground(PaintEventArgs e)
         {
-            var g = e.Graphics;
-            Dark.PaintUnder(this, g);
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            var r = new RectangleF(0.5f, 0.5f, Width - 1f, Height - 1f);
-            using (var path = Dark.RoundedRect(r, Radius))
-            {
-                using (var fill = new SolidBrush(Fill)) g.FillPath(fill, path);
-                if (!Edge.IsEmpty) using (var pen = new Pen(Edge)) g.DrawPath(pen, path);
-            }
+            DrawUnder(this, e.Graphics);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && look != null) { look.Dispose(); look = null; }
+            base.Dispose(disposing);
         }
     }
 
@@ -1284,11 +1369,11 @@ namespace RyGT
             logCard.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
             // Settings: display and shaders on the left, graphics on the right.
-            var settingsPage = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, AutoScroll = true, Margin = new Padding(0) };
+            var settingsPage = new ScrollPage { Dock = DockStyle.Fill, ColumnCount = 2, AutoScroll = true, Margin = new Padding(0) };
             settingsPage.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
             settingsPage.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
             pages[1].Controls.Add(settingsPage);
-            RepaintOnScroll(settingsPage);
+
             var settingsTitle = PageTitle("Settings", "Saved as you change them; the game reads them when it starts.");
             settingsPage.Controls.Add(settingsTitle, 0, 0);
             settingsPage.SetColumnSpan(settingsTitle, 2);
@@ -1958,8 +2043,7 @@ namespace RyGT
             // Controls: which controller is which player (splitscreen) with a live preview, the
             // controller and keyboard bindings, and racing wheels and pedals (ryty-input.ini /
             // ryty-wheel.ini, read by libScePad).
-            var controlsPage = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, AutoScroll = true, Margin = new Padding(0) };
-            RepaintOnScroll(controlsPage);
+            var controlsPage = new ScrollPage { Dock = DockStyle.Fill, ColumnCount = 1, AutoScroll = true, Margin = new Padding(0) };
             controlsPage.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             pages[2].Controls.Add(controlsPage);
             controlsPage.Controls.Add(PageTitle("Controls", "2 players for Arcade's Split Screen: pick each player's name and controller, and what each " +
@@ -2015,7 +2099,7 @@ namespace RyGT
             side.Controls.Add(Item("Set up", "Convert the game from your dump", "U", Badges[6], delegate { if (setup.Enabled) StartSetup(); }));
             side.Controls.Add(Item("Open folder", "The RyGTS folder in Explorer", "F", Badges[7], OpenFolder));
 
-            foreach (var column in new[] { settingsPage, controlsPage, side }) Stack(column);
+            foreach (var column in new TableLayoutPanel[] { settingsPage, controlsPage, side }) Stack(column);
             ShowPage(0);
             Dark.Apply(this);
             if (glass)
@@ -2127,6 +2211,7 @@ namespace RyGT
                     bg.InterpolationMode = resizing ? InterpolationMode.Low : InterpolationMode.HighQualityBicubic;
                     bg.DrawImage(background, client.Width - width, (client.Height - height) / 12, width, height);
                 }
+                Dark.BackdropVersion++;
                 backdropDim = backdropRaw.Clone(new Rectangle(Point.Empty, client), System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
                 using (var bg = Graphics.FromImage(backdropDim))
                 using (var dim = new SolidBrush(Color.FromArgb(120, 8, 8, 8)))
@@ -2134,15 +2219,7 @@ namespace RyGT
             }
             var offset = control == this ? Point.Empty : PointToClient(control.PointToScreen(Point.Empty));
             // PERF-GTS-435: copy only the part being painted, unscaled, instead of the whole window's picture.
-            var area = Rectangle.Intersect(Rectangle.Ceiling(g.ClipBounds), new Rectangle(-offset.X, -offset.Y, client.Width, client.Height));
-            if (area.Width <= 0 || area.Height <= 0) return true;
-            var mode = g.CompositingMode;
-            var interpolation = g.InterpolationMode;
-            g.CompositingMode = CompositingMode.SourceCopy;
-            g.InterpolationMode = InterpolationMode.NearestNeighbor;
-            g.DrawImage(raw ? backdropRaw : backdropDim, area, new Rectangle(area.X + offset.X, area.Y + offset.Y, area.Width, area.Height), GraphicsUnit.Pixel);
-            g.CompositingMode = mode;
-            g.InterpolationMode = interpolation;
+            Dark.CopyArea(raw ? backdropRaw : backdropDim, offset, g);
             return true;
         }
 
@@ -2161,14 +2238,6 @@ namespace RyGT
                 cp.ExStyle |= 0x02000000; // WS_EX_COMPOSITED
                 return cp;
             }
-        }
-
-        /// Scrolling moves the controls but not the window's picture under them, so the copied
-        /// pixels are wrong: repaint the page instead.
-        static void RepaintOnScroll(ScrollableControl page)
-        {
-            page.Scroll += delegate { page.Invalidate(true); };
-            page.MouseWheel += delegate { page.Invalidate(true); };
         }
 
         // Dragging the window edge: the old backdrop and layout stay until it stops, then both update once.
