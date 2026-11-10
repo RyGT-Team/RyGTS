@@ -75,7 +75,12 @@ namespace RyGT
         /// A table in the launcher's dark colors.
         public static DataGridView DarkGrid(string accessibleName)
         {
-            var grid = new DataGridView
+            return DarkGrid<DataGridView>(accessibleName);
+        }
+
+        public static T DarkGrid<T>(string accessibleName) where T : DataGridView, new()
+        {
+            var grid = new T
             {
                 Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 6),
                 AllowUserToAddRows = false, AllowUserToDeleteRows = true, AllowUserToResizeRows = false,

@@ -1,14 +1,14 @@
 # Advanced page: renderer switches and environment variables (FEAT-GTS-433, FEAT-GTS-437)
 
-The Advanced tab lists the experimental `RYGT_*` switches of the installed renderer and sets them
+The Advanced tab lists the experimental `RYGT_*` and `SHADGT_*` switches of the installed renderer and sets them
 for `GTSport.exe` when the launcher starts it.
 
 ## Where the list comes from
 
-Nothing is listed in the launcher. When the launcher starts it reads `libSceVideoOut.prx` as a file
+Nothing is listed in the launcher. When the launcher starts it reads `libs\libSceVideoOut.prx` (the copy the game loads) as a file
 (it never loads it) and collects:
 
-- every string that is exactly `RYGT_` plus capitals, digits and `_`: the names the renderer passes to
+- every string that is exactly `RYGT_` or `SHADGT_` plus capitals, digits and `_`: the names the renderer passes to
   `getenv`. A switch added to the renderer appears with the next renderer build.
 - every `RYGTSW1|NAME|kind|group|default|values|description` string: the renderer's description of a
   switch, kept in shadGT's `src/video_core/rygt_switches.cpp` (exported as `RyGT_SwitchDescriptions`

@@ -2,9 +2,9 @@
 
 ## Renderer switches on the launcher's Advanced page
 
-The launcher (`loader/`) does not keep a list of the renderer's `RYGT_*` switches. `SwitchWalker`
-in `loader/AdvancedPage.cs` reads `libSceVideoOut.prx` as a file (it never loads it) and lists every
-`"RYGT_..."` string the renderer passes to `getenv`. Descriptions come from the same DLL:
+The launcher (`loader/`) does not keep a list of the renderer's `RYGT_*` and `SHADGT_*` switches. `SwitchWalker`
+in `loader/AdvancedPage.cs` reads `libs\libSceVideoOut.prx` (the copy the game loads) as a file (it never loads it) and lists every
+`"RYGT_..."` and `"SHADGT_..."` string the renderer passes to `getenv`. Descriptions come from the same DLL:
 `"RYGTSW1|NAME|kind|group|default|values|description"` strings in shadGT's
 `src/video_core/rygt_switches.cpp`. See `loader/ADVANCED-PAGE.md`.
 

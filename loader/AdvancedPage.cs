@@ -1,4 +1,4 @@
-// FEAT-GTS-437: the Advanced page. The experimental renderer and runtime switches (RYGT_* environment
+// FEAT-GTS-437: the Advanced page. The experimental renderer and runtime switches (RYGT_* and SHADGT_* environment
 // variables read by shadGT and RyGTS) as one table with a description on hover, and a table for any
 // other variable. All of them are saved in RyGT.ini as env= lines and set for GTSport.exe when the
 // launcher starts it (CustomEnvironment.Apply).
@@ -13,7 +13,7 @@ using System.Windows.Forms;
 
 namespace RyGT
 {
-    /// One RYGT_* switch found in the renderer (libSceVideoOut.prx).
+    /// One RYGT_* or SHADGT_* switch found in the renderer (libSceVideoOut.prx).
     class RendererSwitch
     {
         public string Name = "", Kind = "", Default = "", Values = "", Tooltip = "", Group = "";
@@ -26,14 +26,15 @@ namespace RyGT
     /// FEAT-GTS-437: finds the switches in the renderer file instead of a list in the launcher, so a
     /// new switch appears as soon as the renderer reads it. Reads the file (never loads it) and
     /// collects:
-    /// - every string that is exactly RYGT_ and capitals, digits and _ (the names the renderer passes
+    /// - every string that is exactly RYGT_ or SHADGT_ and capitals, digits and _ (the names the renderer passes
     ///   to getenv), and
     /// - every "RYGTSW1|NAME|kind|group|default|values|description" string: the renderer's own
     ///   description of a switch (src/common/rygt_switches.cpp in shadGT).
     /// A switch without a description is still listed; a description without the name is not.
     static class SwitchWalker
     {
-        public const string RendererFile = "libSceVideoOut.prx";
+        // FIX-GTS-439: the game loads the renderer from libs\, so read that copy, not one in the game folder.
+        public const string RendererFile = @"libs\libSceVideoOut.prx";
         public const string DiagnosticsGroup = "Diagnostics & tracing";
         public const string UndescribedGroup = "Not described in this renderer build";
         const string MetadataPrefix = "RYGTSW1|";
@@ -60,8 +61,8 @@ namespace RyGT
             {
                 // Strings may follow other data directly (the compiler packs them), so only a name
                 // character right before rules a match out.
-                if (data[i] != (byte)'R' || (i > 0 && IsNameByte(data[i - 1]))) continue;
-                if (data[i + 1] != (byte)'Y' || data[i + 2] != (byte)'G' || data[i + 3] != (byte)'T') continue;
+                if ((data[i] != (byte)'R' && data[i] != (byte)'S') || (i > 0 && IsNameByte(data[i - 1]))) continue;
+                if (!StartsWith(data, i, "RYGT") && !StartsWith(data, i, "SHADGT_")) continue;
                 int end = i;
                 while (end < data.Length && data[end] != 0 && end - i < 4096) ++end;
                 if (end >= data.Length || data[end] != 0) continue;
@@ -72,8 +73,7 @@ namespace RyGT
                     var entry = Parse(text.Substring(MetadataPrefix.Length));
                     if (entry != null) described[entry.Name] = entry;
                 }
-                else if (text.Length > 5 && text.StartsWith("RYGT_", StringComparison.Ordinal) && CustomEnvironment.IsValidName(text) &&
-                         text.ToUpperInvariant() == text)
+                else if (IsSwitchName(text))
                     names.Add(text);
             }
 
@@ -91,6 +91,25 @@ namespace RyGT
             return list.OrderBy(s => order(s.Group)).ThenBy(s => s.Group, StringComparer.Ordinal).ThenBy(s => s.Name, StringComparer.Ordinal).ToList();
         }
 
+        /// The prefixes of the renderer's switches: RYGT_ (ryGT's) and SHADGT_ (shadGT's, FEAT-GTS-443).
+        static readonly string[] NamePrefixes = { "RYGT_", "SHADGT_" };
+
+        static bool IsSwitchName(string text)
+        {
+            if (!CustomEnvironment.IsValidName(text) || text.ToUpperInvariant() != text) return false;
+            foreach (var prefix in NamePrefixes)
+                if (text.Length > prefix.Length && text.StartsWith(prefix, StringComparison.Ordinal)) return true;
+            return false;
+        }
+
+        static bool StartsWith(byte[] data, int at, string prefix)
+        {
+            if (at + prefix.Length > data.Length) return false;
+            for (int k = 0; k < prefix.Length; ++k)
+                if (data[at + k] != (byte)prefix[k]) return false;
+            return true;
+        }
+
         static bool IsNameByte(byte b)
         {
             return b == '_' || (b >= '0' && b <= '9') || (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z');
@@ -106,6 +125,45 @@ namespace RyGT
                 Name = parts[0], Kind = parts[1].Trim().ToLowerInvariant(), Group = parts[2].Trim().Length > 0 ? parts[2].Trim() : "Other",
                 Default = parts[3].Trim(), Values = parts[4].Trim(), Tooltip = parts[5].Trim()
             };
+        }
+    }
+
+    /// FIX-GTS-440: Tab and Shift+Tab go to the next or previous switch's setting (skipping the
+    /// "When not set" column, headings and hidden rows), also while typing in a value; past the
+    /// last switch Tab leaves the table.
+    sealed class SwitchGrid : DataGridView
+    {
+        public Func<DataGridViewRow, bool> IsSwitch;
+
+        protected override bool ProcessDialogKey(Keys keyData)
+        {
+            if ((keyData & Keys.KeyCode) == Keys.Tab && (keyData & (Keys.Control | Keys.Alt)) == 0)
+                return MoveToSwitch((keyData & Keys.Shift) != 0);
+            return base.ProcessDialogKey(keyData);
+        }
+
+        protected override bool ProcessDataGridViewKey(KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Tab && !e.Control && !e.Alt) return MoveToSwitch(e.Shift);
+            return base.ProcessDataGridViewKey(e);
+        }
+
+        bool MoveToSwitch(bool back)
+        {
+            int step = back ? -1 : 1;
+            int start = CurrentCell != null ? CurrentCell.RowIndex : (back ? Rows.Count : -1);
+            for (int i = start + step; i >= 0 && i < Rows.Count; i += step)
+            {
+                var row = Rows[i];
+                if (!row.Visible || IsSwitch == null || !IsSwitch(row)) continue;
+                CurrentCell = row.Cells[1]; // ends an edit in progress first
+                return true;
+            }
+            // No switch further on: leave the table like any other control.
+            if (IsCurrentCellInEditMode) EndEdit();
+            var form = FindForm();
+            if (form != null) form.SelectNextControl(this, !back, true, true, true);
+            return true;
         }
     }
 
@@ -160,9 +218,33 @@ namespace RyGT
 
             // The search box, the filters and Reset all.
             var bar = new FlowLayoutPanel { AutoSize = true, WrapContents = true, BackColor = Color.Transparent, Margin = new Padding(0, 0, 0, 8) };
-            var searchField = new Card(Dark.Field) { AutoSize = false, Width = 260, Height = 30, Radius = 8, Edge = Color.Empty, Padding = new Padding(10, 7, 10, 6), Margin = new Padding(0, 0, 14, 0) };
+            var searchField = new Card(Dark.Field) { AutoSize = false, Width = 260, Height = 30, Radius = 8, Edge = Color.Empty, Padding = new Padding(10, 7, 6, 6), Margin = new Padding(0, 0, 14, 0) };
             var search = new TextBox { Dock = DockStyle.Fill, BorderStyle = BorderStyle.None, Margin = new Padding(0), AccessibleName = "Search switches" };
-            searchField.Controls.Add(search);
+            // FEAT-GTS-441: a clear button at the box's right edge, shown while there is text; Esc
+            // in the box clears it too.
+            var clearSearch = new Label
+            {
+                Text = "\u2715", AutoSize = false, Size = new Size(18, 17), TextAlign = ContentAlignment.MiddleCenter,
+                Font = new Font("Segoe UI Symbol", 8f), ForeColor = Dark.DimText, BackColor = Dark.Field, Tag = "heading",
+                Cursor = Cursors.Hand, Margin = new Padding(4, 0, 0, 0), Visible = false,
+                AccessibleName = "Clear search", AccessibleRole = AccessibleRole.PushButton
+            };
+            clearSearch.MouseEnter += delegate { clearSearch.ForeColor = Dark.Text; };
+            clearSearch.MouseLeave += delegate { clearSearch.ForeColor = Dark.DimText; };
+            clearSearch.Click += delegate { search.Clear(); search.Focus(); };
+            search.KeyDown += (sender, e) =>
+            {
+                if (e.KeyCode != Keys.Escape || search.TextLength == 0) return;
+                search.Clear();
+                e.Handled = e.SuppressKeyPress = true;
+            };
+            search.TextChanged += delegate { clearSearch.Visible = search.TextLength > 0; };
+            searchField.ColumnStyles.Clear();
+            searchField.ColumnCount = 2;
+            searchField.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            searchField.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            searchField.Controls.Add(search, 0, 0);
+            searchField.Controls.Add(clearSearch, 1, 0);
             // The grey hint in the empty box (EM_SETCUEBANNER).
             search.HandleCreated += delegate { SendMessage(search.Handle, 0x1501, new IntPtr(1), "Search names and descriptions"); };
             var showDiagnostics = new DarkCheckBox { Text = "Show diagnostics and tracing", AutoSize = true, Margin = new Padding(0, 6, 14, 0) };
@@ -179,7 +261,7 @@ namespace RyGT
             // The switches: a group heading row, then one row per switch.
             var card = new Card(cardFill) { Dock = DockStyle.Fill, Padding = new Padding(12), Margin = new Padding(0, 0, 0, 12) };
             card.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            var grid = CustomEnvironment.DarkGrid("Experimental switches");
+            var grid = CustomEnvironment.DarkGrid<SwitchGrid>("Experimental switches");
             grid.Dock = DockStyle.Fill;
             grid.Margin = new Padding(0);
             grid.AllowUserToDeleteRows = false;
@@ -259,7 +341,7 @@ namespace RyGT
                 foreach (var heading in headings) heading.Key.Visible = sortColumn < 0 && visibleGroups.Contains(heading.Value);
                 grid.ResumeLayout();
                 count.Text = walkError != null ? "Could not read " + SwitchWalker.RendererFile + ": " + walkError
-                           : catalog.Count == 0 ? "No RYGT_ switches found in " + SwitchWalker.RendererFile
+                           : catalog.Count == 0 ? "No RYGT_ or SHADGT_ switches found in " + SwitchWalker.RendererFile
                            : shown + " of " + catalog.Count + " switches, " + values.Count + " changed";
             };
 
@@ -280,6 +362,7 @@ namespace RyGT
             };
             grid.CellValueChanged += (sender, e) => { if (e.RowIndex >= 0 && e.ColumnIndex == 1) apply(grid.Rows[e.RowIndex]); };
             grid.DataError += (sender, e) => { e.ThrowException = false; };
+            grid.IsSwitch = row => rowSwitch.ContainsKey(row);
 
             // Every setting looks like what it is: an on/off switch as a toggle, any other switch (a number,
             // a mask, a name) as a text box, with the default in grey when empty.
@@ -418,7 +501,10 @@ namespace RyGT
                 grid.CurrentCell = null;
                 grid.Sort(new RowComparer(compare));
                 filter();
-                if (grid.FirstDisplayedScrollingRowIndex > 0) grid.FirstDisplayedScrollingRowIndex = 0;
+                // FIX-GTS-442: back to the top, the first row still shown (row 0 is a heading, hidden
+                // while sorted, and the table throws for a hidden row).
+                int top = grid.Rows.GetFirstRow(DataGridViewElementStates.Visible);
+                if (top >= 0 && grid.FirstDisplayedScrollingRowIndex != top) grid.FirstDisplayedScrollingRowIndex = top;
             };
             filter();
 
