@@ -7,6 +7,7 @@
 #include "prx/libc/include/General.hpp"
 #include "prx/libc/include/GuestAllocations.hpp"
 #include "prx/libkernel/DirectMemory/DirectMemory.hpp"
+#include "prx/libkernel/DirectMemory/BatchMapStage.hpp"
 #include "prx/libkernel/KernelErrors.hpp"
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -37,6 +38,7 @@ struct BatchMapTrace {
  unsigned op[6]{}, pages16{}, pages64{}, other{};
  std::uint64_t bytes{}, start{}, frequency{}, direct_ticks{}, direct_max{};
  int exceptions{};
+ BatchMapStages stages{};
  static std::uint64_t Clock() {
 #ifdef _WIN32
   LARGE_INTEGER q{}; QueryPerformanceCounter(&q); return static_cast<std::uint64_t>(q.QuadPart);
@@ -76,13 +78,15 @@ struct BatchMapTrace {
   const auto end=Clock();
   std::fprintf(stderr,"[batch-map] pid=%lu tid=%lu ordinal=%u start=%llu end=%llu frequency=%llu requested=%d flags=%d attempted=%d processed=%d error=%d exception=%d op=%u/%u/%u/%u/%u/%u bytes=%llu size16k=%u size64k=%u other=%u direct_ticks=%llu direct_max=%llu\n",
    GetCurrentProcessId(),GetCurrentThreadId(),ordinal,static_cast<unsigned long long>(start),static_cast<unsigned long long>(end),static_cast<unsigned long long>(frequency),requested,flags,attempted,succeeded,error,std::uncaught_exceptions()>exceptions,op[0],op[1],op[2],op[3],op[4],op[5],static_cast<unsigned long long>(bytes),pages16,pages64,other,static_cast<unsigned long long>(direct_ticks),static_cast<unsigned long long>(direct_max));
+  for (unsigned i=0;i<4;++i) { const auto& s=stages.stage[i];
+   std::fprintf(stderr,"[batch-map-stage] pid=%lu ordinal=%u stage=%u attempts=%llu completed=%llu ticks=%llu max=%llu\n",GetCurrentProcessId(),ordinal,i,static_cast<unsigned long long>(s.attempts),static_cast<unsigned long long>(s.completed),static_cast<unsigned long long>(s.ticks),static_cast<unsigned long long>(s.maximum)); }
 #endif
  }
 };
 struct BatchDirectTimer {
- BatchMapTrace& trace; std::uint64_t start;
- explicit BatchDirectTimer(BatchMapTrace& t) : trace(t), start(t.active ? BatchMapTrace::Clock() : 0) {}
- ~BatchDirectTimer() { if (start) trace.Direct(start); }
+ BatchMapTrace& trace; std::uint64_t start; BatchMapStages* previous{};
+ explicit BatchDirectTimer(BatchMapTrace& t) : trace(t), start(t.active ? BatchMapTrace::Clock() : 0), previous(diag412_set_context(t.active ? &t.stages : nullptr)) {}
+ ~BatchDirectTimer() { diag412_set_context(previous); if (start) trace.Direct(start); }
 };
 
 constexpr size_t FLEXIBLE_MEMORY_SIZE = 448ULL * 1024 * 1024;

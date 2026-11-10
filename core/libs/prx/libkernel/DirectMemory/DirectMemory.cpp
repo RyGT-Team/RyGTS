@@ -1,4 +1,5 @@
 #include "prx/libkernel/DirectMemory/DirectMemory.hpp"
+#include "prx/libkernel/DirectMemory/BatchMapStage.hpp"
 #include "prx/libc/include/GuestAllocations.hpp"
 #include "prx/libc/include/GuestArena.hpp"
 #include "prx/libc/include/GuestWriteWatch.hpp"
@@ -143,7 +144,36 @@ __declspec(dllexport)
 unsigned RytySerializedMapProtocolVersion_nid_no_patch_cut() { return 1; }
 #endif
 
+namespace { thread_local BatchMapStages* batch_stage_context = nullptr; thread_local unsigned batch_stage_depth = 0; }
+extern "C" BatchMapStages* diag412_set_context(BatchMapStages* current) noexcept {
+    auto* previous=batch_stage_context; batch_stage_context=current; return previous;
+}
 namespace {
+struct BatchStageFrame {
+    bool armed=batch_stage_context != nullptr;
+    BatchStageFrame() { if (armed) ++batch_stage_depth; }
+    ~BatchStageFrame() { if (armed) --batch_stage_depth; }
+};
+struct BatchStageTimer {
+    BatchMapStageCounter* counter{}; std::uint64_t start{}; bool completed{};
+    explicit BatchStageTimer(unsigned index) {
+#ifdef _WIN32
+        if (batch_stage_context && batch_stage_depth == 1) { counter=&batch_stage_context->stage[index]; ++counter->attempts;
+            LARGE_INTEGER q{}; QueryPerformanceCounter(&q); start=static_cast<std::uint64_t>(q.QuadPart); }
+#else
+        (void)index;
+#endif
+    }
+    void Done() noexcept { completed=true; }
+    ~BatchStageTimer() {
+#ifdef _WIN32
+        if (counter) { LARGE_INTEGER q{}; QueryPerformanceCounter(&q);
+            const auto ticks=static_cast<std::uint64_t>(q.QuadPart)-start;
+            counter->ticks+=ticks; counter->maximum=std::max(counter->maximum,ticks);
+            counter->completed+=completed; }
+#endif
+    }
+};
 
 constexpr int GuestMapFixedFlag = 0x10;
 
@@ -562,10 +592,16 @@ int DoMapDirect(void** addr, size_t len, int prot, int flags, int64_t physStart,
     if (physStart < 0 || (static_cast<std::uint64_t>(physStart) & (PS5_PAGE_SIZE - 1)) != 0 || static_cast<std::uint64_t>(physStart) >= DIRECT_MEMORY_SIZE || len > DIRECT_MEMORY_SIZE - static_cast<std::uint64_t>(physStart)) {
         return SCE_KERNEL_ERROR_EINVAL;
     }
-    std::lock_guard transition(g_mappingTransitionMutex);
-    if (*addr != nullptr && (flags & GuestMapFixedFlag) != 0) NotifyRenderer("RytyGpuUnmapMemory", *addr, len);
-    ReleaseFixedOverlap(*addr, len, flags);
+    BatchStageFrame frame;
+    std::unique_lock transition(g_mappingTransitionMutex, std::defer_lock);
+    { BatchStageTimer stage{0}; transition.lock(); stage.Done(); }
+    if (*addr != nullptr && (flags & GuestMapFixedFlag) != 0) {
+        BatchStageTimer stage{1}; NotifyRenderer("RytyGpuUnmapMemory", *addr, len); stage.Done();
+    }
     const int result = [&]() {
+        BatchStageTimer stage{2};
+        ReleaseFixedOverlap(*addr, len, flags);
+        const int mapped_result = [&]() {
         GuestAllocations::Mutation mutation;
         if (RemapFixedIntoRegistered(mutation, *addr, len, prot, flags, physStart)) {
             RecordProtection(*addr, len, prot);
@@ -587,8 +623,11 @@ int DoMapDirect(void** addr, size_t len, int prot, int flags, int64_t physStart,
         RecordProtection(mapped, len, prot);
         Trace("map direct %p+0x%zx phys=0x%llx prot=0x%x flags=0x%x align=0x%zx", mapped, len, static_cast<unsigned long long>(physStart), prot, flags, alignment);
         return 0;
+        }();
+        stage.Done();
+        return mapped_result;
     }();
-    if (result == 0) NotifyRenderer("RytyGpuMapMemory", *addr, len);
+    if (result == 0) { BatchStageTimer stage{3}; NotifyRenderer("RytyGpuMapMemory", *addr, len); stage.Done(); }
     return result;
 }
 
