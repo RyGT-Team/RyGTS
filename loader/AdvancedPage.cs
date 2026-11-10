@@ -268,7 +268,7 @@ namespace RyGT
             grid.MultiSelect = false;
             grid.SelectionMode = DataGridViewSelectionMode.CellSelect;
             grid.EditMode = DataGridViewEditMode.EditOnEnter;
-            grid.ShowCellToolTips = true;
+            grid.ShowCellToolTips = false; // FIX-GTS-444: the page's own tool tip, below
             grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "name", HeaderText = "Switch", ReadOnly = true, FillWeight = 40, AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, SortMode = DataGridViewColumnSortMode.Programmatic });
             grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "setting", HeaderText = "Setting", FillWeight = 22, AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, SortMode = DataGridViewColumnSortMode.Programmatic });
             grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "default", HeaderText = "When not set", ReadOnly = true, FillWeight = 38, AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, SortMode = DataGridViewColumnSortMode.Programmatic });
@@ -363,6 +363,50 @@ namespace RyGT
             grid.CellValueChanged += (sender, e) => { if (e.RowIndex >= 0 && e.ColumnIndex == 1) apply(grid.Rows[e.RowIndex]); };
             grid.DataError += (sender, e) => { e.ThrowException = false; };
             grid.IsSwitch = row => rowSwitch.ContainsKey(row);
+
+            // FIX-GTS-444: a switch's description stays up while the pointer rests on its row (the
+            // grid's own cell tool tips vanish after about 5 seconds). Shown after the usual pause,
+            // without a time limit; hidden when the pointer leaves the row or the table, or on a
+            // click, a key, a scroll or a page change.
+            var switchTip = new ToolTip { UseAnimation = false, UseFading = false };
+            var tipDelay = new Timer { Interval = SystemInformation.MouseHoverTime };
+            int tipRow = -1, pendingRow = -1;
+            Action hideTip = delegate
+            {
+                tipDelay.Stop();
+                pendingRow = -1;
+                if (tipRow < 0) return;
+                tipRow = -1;
+                switchTip.Hide(grid);
+            };
+            grid.CellMouseEnter += (sender, e) =>
+            {
+                if (e.RowIndex == tipRow && tipRow >= 0) return; // another cell of the same row
+                hideTip();
+                if (e.RowIndex < 0 || !rowSwitch.ContainsKey(grid.Rows[e.RowIndex])) return;
+                pendingRow = e.RowIndex;
+                tipDelay.Start();
+            };
+            tipDelay.Tick += delegate
+            {
+                tipDelay.Stop();
+                int row = pendingRow;
+                pendingRow = -1;
+                if (row < 0 || row >= grid.Rows.Count) return;
+                var at = grid.PointToClient(Cursor.Position);
+                var hit = grid.HitTest(at.X, at.Y);
+                if (hit.RowIndex != row) return;
+                string text = grid.Rows[row].Cells[0].ToolTipText;
+                if (string.IsNullOrEmpty(text)) return;
+                tipRow = row;
+                switchTip.Show(text, grid, at.X + 14, at.Y + 22); // no duration: stays until hidden
+            };
+            grid.MouseLeave += delegate { hideTip(); };
+            grid.MouseDown += delegate { hideTip(); };
+            grid.KeyDown += delegate { hideTip(); };
+            grid.Scroll += delegate { hideTip(); };
+            grid.VisibleChanged += delegate { if (!grid.Visible) hideTip(); };
+            grid.Disposed += delegate { tipDelay.Dispose(); switchTip.Dispose(); };
 
             // Every setting looks like what it is: an on/off switch as a toggle, any other switch (a number,
             // a mask, a name) as a text box, with the default in grey when empty.
