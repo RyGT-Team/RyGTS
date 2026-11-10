@@ -303,10 +303,11 @@ namespace RyGT
             foreach (Control child in control.Controls)
             {
                 bool own = child is Card || child is Hero || child is TextBoxBase || child is ListControl || child is ButtonBase ||
-                           child is TrackBar || child is UpDownBase || child is ListItem || child is DarkBar;
+                           child is TrackBar || child is UpDownBase || child is ListItem || child is DarkBar ||
+                           child is DataGridView; // FIX-GTS-434: cannot be see-through (ArgumentException)
                 if (!own && !TypeDescriptor.GetProperties(child)["BackColor"].ShouldSerializeValue(child))
                     child.BackColor = Color.Transparent;
-                if (!(child is TextBoxBase) && !(child is ListControl) && !(child is UpDownBase)) SeeThrough(child);
+                if (!(child is TextBoxBase) && !(child is ListControl) && !(child is UpDownBase) && !(child is DataGridView)) SeeThrough(child);
             }
         }
 
