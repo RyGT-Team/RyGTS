@@ -1081,6 +1081,7 @@ namespace RyGT
         public string Game = "", Update = "", Modules = "", Fonts = "";
         public string StdoutLevel = "Warning";
         public bool HddStreaming = false;
+        public List<EnvVar> Env = new List<EnvVar>(); // FEAT-GTS-433
         readonly string path;
 
         public Settings(string path)
@@ -1091,6 +1092,12 @@ namespace RyGT
             {
                 int eq = line.IndexOf('=');
                 if (eq < 0) continue;
+                if (line.Substring(0, eq).Trim() == "env")
+                {
+                    var entry = CustomEnvironment.Parse(line.Substring(eq + 1)); // the value as written, not trimmed
+                    if (entry != null) Env.Add(entry);
+                    continue;
+                }
                 string key = line.Substring(0, eq).Trim(), value = line.Substring(eq + 1).Trim();
                 if (key == "game") Game = value;
                 else if (key == "update") Update = value;
@@ -1103,7 +1110,9 @@ namespace RyGT
 
         public void Save()
         {
-            File.WriteAllLines(path, new[] { "game=" + Game, "update=" + Update, "modules=" + Modules, "fonts=" + Fonts, "stdout_level=" + StdoutLevel, "hdd_streaming=" + (HddStreaming ? "1" : "0") });
+            var lines = new List<string> { "game=" + Game, "update=" + Update, "modules=" + Modules, "fonts=" + Fonts, "stdout_level=" + StdoutLevel, "hdd_streaming=" + (HddStreaming ? "1" : "0") };
+            foreach (var entry in Env) lines.Add("env=" + CustomEnvironment.Format(entry));
+            File.WriteAllLines(path, lines);
         }
     }
 
@@ -1903,6 +1912,15 @@ namespace RyGT
                 catch (Exception e) { MessageBox.Show(this, "Could not save the setting: " + e.Message); }
             };
             batchRow.Controls.Add(batchLabel);
+
+            // FEAT-GTS-433: renderer and runtime switches (RYGT_*) without a shell.
+            var environment = Section(left, "Custom environment variables");
+            environment.Controls.Add(CustomEnvironment.Editor(settings.Env, list =>
+            {
+                settings.Env = list;
+                try { settings.Save(); }
+                catch (Exception e) { MessageBox.Show(this, "Could not save the environment variables: " + e.Message); }
+            }));
 
             var logging = Section(left, "Logging");
             logging.Controls.Add(new Label { Text = "stdout.log minimum level", AutoSize = true,
@@ -3481,7 +3499,7 @@ namespace RyGT
                     bool antiLag = ReadSetting("GPU", "anti_lag", false) &&
                                    !ReadSetting("GPU", "framegen_enabled", false) &&
                                    !ReadSetting("GPU", "dlssg_enabled", false);
-                    StartGame(root, settings.HddStreaming, experimentalSceneSize, antiLag);
+                    StartGame(root, settings.HddStreaming, experimentalSceneSize, antiLag, CustomEnvironment.Copy(settings.Env));
                     status.Text = "GT Sport is starting. Logs: logs\\stdout.log and logs\\stderr.log.";
                 }));
             });
@@ -3491,7 +3509,7 @@ namespace RyGT
 
         /// Starts GTSport.exe with session log rotation and waits for GPU recovery if Vulkan loses
         /// its device.
-        static void StartGame(string root, bool hddStreaming, Size? sceneSize, bool antiLag)
+        static void StartGame(string root, bool hddStreaming, Size? sceneSize, bool antiLag, List<EnvVar> customEnv)
         {
             string exe = Path.Combine(root, "GTSport.exe");
             // Preserve GT Sport metadata while migrating the launcher publisher field from older installs.
@@ -3524,6 +3542,9 @@ namespace RyGT
                         start.EnvironmentVariables["RYGT_LOG_DIRECTORY"] = logDirectory;
                         start.EnvironmentVariables["RYGT_HDD_STREAMING"] = hddStreaming ? "1" : "0";
                         start.EnvironmentVariables["RYGT_ANTI_LAG"] = antiLag ? "1" : "0"; // PERF-210
+                        // FEAT-GTS-433: the user's list last, so it wins; only the count is logged.
+                        int custom = CustomEnvironment.Apply(start, customEnv);
+                        if (custom > 0) AppendSetupLog(root, custom + " custom environment variable(s) applied.");
                         started = Process.Start(start);
                     }
                     catch (Exception e)
