@@ -109,6 +109,13 @@ namespace RyGT
         }
     }
 
+    sealed class RowComparer : System.Collections.IComparer
+    {
+        readonly Comparison<DataGridViewRow> compare;
+        public RowComparer(Comparison<DataGridViewRow> compare) { this.compare = compare; }
+        public int Compare(object a, object b) { return compare((DataGridViewRow)a, (DataGridViewRow)b); }
+    }
+
     static class AdvancedPage
     {
         [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
@@ -180,9 +187,9 @@ namespace RyGT
             grid.SelectionMode = DataGridViewSelectionMode.CellSelect;
             grid.EditMode = DataGridViewEditMode.EditOnEnter;
             grid.ShowCellToolTips = true;
-            grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "name", HeaderText = "Switch", ReadOnly = true, FillWeight = 40, AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, SortMode = DataGridViewColumnSortMode.NotSortable });
-            grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "setting", HeaderText = "Setting", FillWeight = 22, AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, SortMode = DataGridViewColumnSortMode.NotSortable });
-            grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "default", HeaderText = "When not set", ReadOnly = true, FillWeight = 38, AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, SortMode = DataGridViewColumnSortMode.NotSortable });
+            grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "name", HeaderText = "Switch", ReadOnly = true, FillWeight = 40, AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, SortMode = DataGridViewColumnSortMode.Programmatic });
+            grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "setting", HeaderText = "Setting", FillWeight = 22, AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, SortMode = DataGridViewColumnSortMode.Programmatic });
+            grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "default", HeaderText = "When not set", ReadOnly = true, FillWeight = 38, AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, SortMode = DataGridViewColumnSortMode.Programmatic });
             grid.Columns[2].DefaultCellStyle.ForeColor = Dark.DimText;
             grid.Columns[0].DefaultCellStyle.Font = new Font("Consolas", 9f);
             grid.Columns[1].DefaultCellStyle.Padding = new Padding(9, 5, 9, 5); // the editor inside the drawn box
@@ -202,12 +209,14 @@ namespace RyGT
                 {
                     group = s.Group;
                     int h = grid.Rows.Add(group, "", "");
+                    grid.Rows[h].Tag = h;
                     var heading = grid.Rows[h];
                     heading.ReadOnly = true;
                     heading.DefaultCellStyle = headingStyle;
                     headings.Add(new KeyValuePair<DataGridViewRow, string>(heading, group));
                 }
                 int index = grid.Rows.Add(s.Name, "", s.Default);
+                grid.Rows[index].Tag = index;
                 var row = grid.Rows[index];
                 rowSwitch[row] = s;
                 string current;
@@ -228,6 +237,8 @@ namespace RyGT
             page.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
+            int sortColumn = -1; // -1: grouped (the order the renderer's groups give)
+            bool sortDescending = false;
             Action filter = delegate
             {
                 string text = search.Text.Trim();
@@ -245,7 +256,7 @@ namespace RyGT
                     pair.Key.Visible = visible;
                     if (visible) { ++shown; visibleGroups.Add(s.Group); }
                 }
-                foreach (var heading in headings) heading.Key.Visible = visibleGroups.Contains(heading.Value);
+                foreach (var heading in headings) heading.Key.Visible = sortColumn < 0 && visibleGroups.Contains(heading.Value);
                 grid.ResumeLayout();
                 count.Text = walkError != null ? "Could not read " + SwitchWalker.RendererFile + ": " + walkError
                            : catalog.Count == 0 ? "No RYGT_ switches found in " + SwitchWalker.RendererFile
@@ -369,6 +380,45 @@ namespace RyGT
                 values.Clear();
                 store();
                 filter();
+            };
+            // FEAT-GTS-437: a header click sorts by that column: ascending, descending, then back to the
+            // groups. Setting sorts On toggles and filled-in values first (ascending), then Off and empty.
+            Func<DataGridViewRow, int> settingRank = row =>
+            {
+                RendererSwitch s;
+                if (!rowSwitch.TryGetValue(row, out s)) return 2;
+                string value = Convert.ToString(row.Cells[1].Value) ?? "";
+                if (!s.IsFlag) return value.Length > 0 ? 0 : 1;
+                bool defaultKnown;
+                return IsOn(value, DefaultOn(s, out defaultKnown)) ? 0 : 1;
+            };
+            Comparison<DataGridViewRow> compare = (a, b) =>
+            {
+                if (sortColumn < 0) return ((int)a.Tag).CompareTo((int)b.Tag);
+                // Headings (hidden while sorted) go last, in their own order.
+                bool ha = !rowSwitch.ContainsKey(a), hb = !rowSwitch.ContainsKey(b);
+                if (ha || hb) return ha && hb ? ((int)a.Tag).CompareTo((int)b.Tag) : ha ? 1 : -1;
+                int result;
+                if (sortColumn == 1) result = settingRank(a).CompareTo(settingRank(b));
+                else result = string.Compare(Convert.ToString(a.Cells[sortColumn].Value), Convert.ToString(b.Cells[sortColumn].Value), StringComparison.OrdinalIgnoreCase);
+                if (sortDescending) result = -result;
+                // Ties by name, always A to Z.
+                return result != 0 ? result : string.CompareOrdinal(Convert.ToString(a.Cells[0].Value), Convert.ToString(b.Cells[0].Value));
+            };
+            grid.ColumnHeaderMouseClick += (sender, e) =>
+            {
+                if (e.Button != MouseButtons.Left) return;
+                if (grid.IsCurrentCellInEditMode) grid.EndEdit();
+                if (sortColumn != e.ColumnIndex) { sortColumn = e.ColumnIndex; sortDescending = false; }
+                else if (!sortDescending) sortDescending = true;
+                else sortColumn = -1;
+                foreach (DataGridViewColumn column in grid.Columns)
+                    column.HeaderCell.SortGlyphDirection = column.Index != sortColumn ? SortOrder.None
+                                                         : sortDescending ? SortOrder.Descending : SortOrder.Ascending;
+                grid.CurrentCell = null;
+                grid.Sort(new RowComparer(compare));
+                filter();
+                if (grid.FirstDisplayedScrollingRowIndex > 0) grid.FirstDisplayedScrollingRowIndex = 0;
             };
             filter();
 
