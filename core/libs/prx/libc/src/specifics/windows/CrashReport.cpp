@@ -18,7 +18,18 @@
 #include "Sse4aEmulation.hpp"
 #include <io.h>
 extern "C" void RytySnapshotMarkUnsafe(std::uint64_t, std::uint64_t) noexcept;
+#ifndef NDEBUG
 extern "C" void RytySnapshotMarkUnsafeTagged(std::uint64_t, std::uint64_t, std::uint32_t) noexcept;
+#endif
+
+// FIX-418: the cause tag (DIAG-330) exists in Debug builds only; Release marks the range alone.
+static void MarkCodeWriteUnsafe(std::uint64_t address, std::uint64_t size) noexcept {
+#ifndef NDEBUG
+    RytySnapshotMarkUnsafeTagged(address, size, 64);
+#else
+    RytySnapshotMarkUnsafe(address, size);
+#endif
+}
 
 namespace {
 
@@ -123,7 +134,7 @@ thread_local char t_watchWhere[MAX_PATH + 64];
 
 void ProtectWatchPage(DWORD protection) {
     if (protection == PAGE_READWRITE || protection == PAGE_EXECUTE_READWRITE)
-        RytySnapshotMarkUnsafeTagged(g_watchPage, 0x1000, 64);
+        MarkCodeWriteUnsafe(g_watchPage, 0x1000);
     DWORD old;
     VirtualProtect(reinterpret_cast<void*>(g_watchPage), 0x1000, protection, &old);
 }
@@ -196,7 +207,7 @@ thread_local std::uint64_t t_captureDestination = 0;
 thread_local std::uint64_t t_captureSize = 0;
 
 void WriteCodeByte(std::uintptr_t address, std::uint8_t value) {
-    RytySnapshotMarkUnsafeTagged(address, 1, 64);
+    MarkCodeWriteUnsafe(address, 1);
     DWORD old;
     VirtualProtect(reinterpret_cast<void*>(address), 1, PAGE_EXECUTE_READWRITE, &old);
     *reinterpret_cast<volatile std::uint8_t*>(address) = value;
