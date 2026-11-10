@@ -5,7 +5,7 @@ for `GTSport.exe` when the launcher starts it.
 
 ## Where the list comes from
 
-Nothing is listed in the launcher. When the launcher starts it reads `libSceVideoOut.prx` as a file
+Nothing is listed in the launcher. When the launcher starts it reads `libs\libSceVideoOut.prx` (the copy the game loads) as a file
 (it never loads it) and collects:
 
 - every string that is exactly `RYGT_` plus capitals, digits and `_`: the names the renderer passes to
