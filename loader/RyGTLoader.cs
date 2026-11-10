@@ -1217,8 +1217,8 @@ namespace RyGT
         readonly TextBox game, update, modules, fonts, log;
         readonly Button setup, play, addDlss;
         readonly Label status;
-        readonly Panel[] pages = new Panel[3];
-        readonly Button[] tabs = new Button[3];
+        readonly Panel[] pages = new Panel[4];
+        readonly Button[] tabs = new Button[4];
         readonly ToolTip shaderObjectTip = new ToolTip();
         volatile bool busy;
         Action<bool> showGraphics;
@@ -1240,7 +1240,7 @@ namespace RyGT
             try { logo.Image = new Icon(Icon, 32, 32).ToBitmap(); } catch { }
             top.Controls.Add(logo);
             top.Controls.Add(new Label { Text = "RyGTS", AutoSize = true, Font = new Font("Segoe UI Semibold", 14f), Margin = new Padding(0, 1, 28, 0) });
-            var tabNames = new[] { "Home", "Settings", "Controls" };
+            var tabNames = new[] { "Home", "Settings", "Controls", "Advanced" };
             for (int i = 0; i < tabs.Length; ++i)
             {
                 int page = i;
@@ -2004,15 +2004,6 @@ namespace RyGT
             };
             batchRow.Controls.Add(batchLabel);
 
-            // FEAT-GTS-433: renderer and runtime switches (RYGT_*) without a shell.
-            var environment = Section(left, "Custom environment variables");
-            environment.Controls.Add(CustomEnvironment.Editor(settings.Env, list =>
-            {
-                settings.Env = list;
-                try { settings.Save(); }
-                catch (Exception e) { MessageBox.Show(this, "Could not save the environment variables: " + e.Message); }
-            }));
-
             var logging = Section(left, "Logging");
             logging.Controls.Add(new Label { Text = "stdout.log minimum level", AutoSize = true,
                 BackColor = Color.Transparent, Margin = new Padding(0, 0, 0, 4) });
@@ -2085,6 +2076,20 @@ namespace RyGT
                 ForeColor = Dark.DimText, Tag = "heading", Margin = new Padding(0, 0, 0, 2)
             });
 
+            // FEAT-GTS-437: Advanced, the experimental renderer and runtime switches (RYGT_* environment
+            // variables) with a description on hover, and any other variable for GTSport.exe.
+            var advancedPage = new TableLayoutPanel { Dock = DockStyle.Fill, Margin = new Padding(0) };
+            pages[3].Controls.Add(advancedPage);
+            AdvancedPage.Build(advancedPage,
+                PageTitle("Advanced", "Experimental renderer switches for testing and diagnosis. They can break rendering, slow the game " +
+                                      "or write large logs; hover a switch for what it does. Saved as you change them; used the next time the game starts."),
+                background != null ? Color.FromArgb(200, 32, 32, 32) : Dark.Card, root, settings.Env, list =>
+                {
+                    settings.Env = list;
+                    try { settings.Save(); }
+                    catch (Exception e) { MessageBox.Show(this, "Could not save the switches: " + e.Message); }
+                });
+
             // Quick access, beside every page.
             side.Controls.Add(new Label { Text = "Quick access", AutoSize = true, Font = new Font("Segoe UI Semibold", 12f), Margin = new Padding(4, 0, 0, 8) });
             side.Controls.Add(GroupLabel("Controls"));
@@ -2095,6 +2100,7 @@ namespace RyGT
             side.Controls.Add(Item("Display", "Screen, resolution, refresh rate", "D", Badges[3], delegate { ShowPage(1); showGraphics(true); }));
             side.Controls.Add(Item("Graphics", "FSR, DLSS, frame generation", "G", Badges[4], delegate { ShowPage(1); showGraphics(true); }));
             side.Controls.Add(Item("Shaders", "Precompiling and compile pauses", "S", Badges[5], delegate { ShowPage(1); showGraphics(false); }));
+            side.Controls.Add(Item("Advanced", "Experimental renderer switches", "A", Badges[8], delegate { ShowPage(3); }));
             side.Controls.Add(GroupLabel("Game"));
             side.Controls.Add(Item("Set up", "Convert the game from your dump", "U", Badges[6], delegate { if (setup.Enabled) StartSetup(); }));
             side.Controls.Add(Item("Open folder", "The RyGTS folder in Explorer", "F", Badges[7], OpenFolder));
@@ -2119,10 +2125,11 @@ namespace RyGT
         static readonly Color[] Badges =
         {
             Color.FromArgb(232, 140, 48), Color.FromArgb(214, 84, 132), Color.FromArgb(70, 176, 120), Color.FromArgb(82, 128, 226),
-            Color.FromArgb(140, 104, 222), Color.FromArgb(40, 160, 170), Color.FromArgb(178, 24, 36), Color.FromArgb(110, 110, 118)
+            Color.FromArgb(140, 104, 222), Color.FromArgb(40, 160, 170), Color.FromArgb(178, 24, 36), Color.FromArgb(110, 110, 118),
+            Color.FromArgb(196, 160, 40)
         };
 
-        /// Shows Home (0), Settings (1) or Controls (2), and marks its tab.
+        /// Shows Home (0), Settings (1), Controls (2) or Advanced (3), and marks its tab.
         [DllImport("user32.dll")]
         static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
 
