@@ -114,7 +114,7 @@ namespace RyGT
         [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
         static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wParam, string lParam);
 
-        const string DefaultText = "Default", OnText = "On (1)", OffText = "Off (0)";
+        static readonly Color BoxFill = Color.FromArgb(54, 54, 54), BoxEdge = Color.FromArgb(78, 78, 78);
 
         /// Builds the page into `page`. `env` is the saved list (RyGT.ini env= lines); `save` gets the
         /// new full list after every change.
@@ -185,6 +185,7 @@ namespace RyGT
             grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "default", HeaderText = "When not set", ReadOnly = true, FillWeight = 38, AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, SortMode = DataGridViewColumnSortMode.NotSortable });
             grid.Columns[2].DefaultCellStyle.ForeColor = Dark.DimText;
             grid.Columns[0].DefaultCellStyle.Font = new Font("Consolas", 9f);
+            grid.Columns[1].DefaultCellStyle.Padding = new Padding(9, 5, 9, 5); // the editor inside the drawn box
 
             var headingStyle = new DataGridViewCellStyle
             {
@@ -211,16 +212,9 @@ namespace RyGT
                 rowSwitch[row] = s;
                 string current;
                 values.TryGetValue(s.Name, out current);
-                if (s.IsFlag)
-                {
-                    var combo = new DataGridViewComboBoxCell { FlatStyle = FlatStyle.Flat, DisplayStyle = DataGridViewComboBoxDisplayStyle.Nothing };
-                    combo.Items.AddRange(DefaultText, OnText, OffText);
-                    string shown = current == null ? DefaultText : current == "1" ? OnText : current == "0" ? OffText : current;
-                    if (!combo.Items.Contains(shown)) combo.Items.Add(shown);
-                    row.Cells[1] = combo;
-                    combo.Value = shown;
-                }
-                else row.Cells[1].Value = current ?? "";
+                // An on/off switch is a toggle (clicked, not typed into); the cell holds "1", "0" or "".
+                row.Cells[1].Value = current ?? "";
+                row.Cells[1].ReadOnly = s.IsFlag;
                 string tip = Tip(s);
                 foreach (DataGridViewCell cell in row.Cells) cell.ToolTipText = tip;
                 Mark(row, current != null);
@@ -263,7 +257,7 @@ namespace RyGT
                 RendererSwitch s;
                 if (loading || !rowSwitch.TryGetValue(row, out s)) return;
                 string text = ((row.Cells[1].Value as string) ?? "").Trim();
-                string value = s.IsFlag ? (text == DefaultText ? "" : text == OnText ? "1" : text == OffText ? "0" : text) : text;
+                string value = text;
                 string error = value.Length == 0 || Valid(s, value) ? "" : "Not saved: " + KindHint(s) + ".";
                 row.ErrorText = error;
                 if (value.Length == 0 || error.Length > 0) values.Remove(s.Name);
@@ -273,19 +267,86 @@ namespace RyGT
                 int comma = count.Text.LastIndexOf(',');
                 if (comma > 0) count.Text = count.Text.Substring(0, comma + 1) + " " + values.Count + " changed";
             };
-            grid.CurrentCellDirtyStateChanged += delegate
-            {
-                if (grid.IsCurrentCellDirty && grid.CurrentCell is DataGridViewComboBoxCell) grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
-            };
             grid.CellValueChanged += (sender, e) => { if (e.RowIndex >= 0 && e.ColumnIndex == 1) apply(grid.Rows[e.RowIndex]); };
             grid.DataError += (sender, e) => { e.ThrowException = false; };
+
+            // Every setting looks like what it is: an on/off switch as a toggle, any other switch (a number,
+            // a mask, a name) as a text box, with the default in grey when empty.
+            grid.RowTemplate.Height = 26;
+            foreach (DataGridViewRow row in grid.Rows) row.Height = 26;
+            grid.CellPainting += (sender, e) =>
+            {
+                if (e.RowIndex < 0 || e.ColumnIndex != 1) return;
+                RendererSwitch s;
+                if (!rowSwitch.TryGetValue(grid.Rows[e.RowIndex], out s)) return;
+                e.PaintBackground(e.ClipBounds, (e.State & DataGridViewElementStates.Selected) != 0);
+                if (s.IsFlag)
+                {
+                    PaintToggle(e.Graphics, e.CellBounds, s, Convert.ToString(e.Value) ?? "", grid.Font);
+                    e.Handled = true;
+                    return;
+                }
+                var box = new Rectangle(e.CellBounds.X + 4, e.CellBounds.Y + 3, e.CellBounds.Width - 10, e.CellBounds.Height - 7);
+                var g = e.Graphics;
+                var smoothing = g.SmoothingMode;
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                bool hot = grid.CurrentCell != null && grid.CurrentCell.RowIndex == e.RowIndex && grid.CurrentCell.ColumnIndex == 1;
+                Dark.FillRounded(g, BoxFill, box, 4);
+                using (var path = Dark.RoundedRect(new RectangleF(box.X + 0.5f, box.Y + 0.5f, box.Width - 1, box.Height - 1), 4))
+                using (var pen = new Pen(hot ? Dark.AccentText : BoxEdge))
+                    g.DrawPath(pen, path);
+                g.SmoothingMode = smoothing;
+                string text = Convert.ToString(e.FormattedValue) ?? "";
+                bool placeholder = false;
+                var textArea = new Rectangle(box.X + 6, box.Y, box.Width - 12, box.Height);
+                if (text.Length == 0)
+                {
+                    text = s.Described && s.Default.Length > 0 ? s.Default : "value";
+                    placeholder = true;
+                }
+                var color = placeholder ? Color.FromArgb(120, 120, 120) : e.CellStyle.ForeColor;
+                TextRenderer.DrawText(g, text, placeholder ? grid.Font : e.CellStyle.Font, textArea, color,
+                                      TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
+                e.Handled = true;
+            };
+            // The editor sits inside the same box.
+            grid.EditingControlShowing += (sender, e) =>
+            {
+                e.Control.BackColor = BoxFill;
+                e.Control.ForeColor = Dark.Text;
+                var text = e.Control as TextBox;
+                if (text != null) text.BorderStyle = BorderStyle.None;
+            };
+            // Clicking a toggle (or Space on it) flips it. Flipping back to the default state clears the
+            // setting, so only real changes are saved.
+            Action<int> toggle = rowIndex =>
+            {
+                RendererSwitch s;
+                if (rowIndex < 0 || !rowSwitch.TryGetValue(grid.Rows[rowIndex], out s) || !s.IsFlag) return;
+                var cell = grid.Rows[rowIndex].Cells[1];
+                bool defaultKnown;
+                bool defaultOn = DefaultOn(s, out defaultKnown);
+                bool on = !IsOn(Convert.ToString(cell.Value) ?? "", defaultOn);
+                cell.Value = defaultKnown && on == defaultOn ? "" : on ? "1" : "0";
+            };
+            grid.CellMouseClick += (sender, e) => { if (e.Button == MouseButtons.Left && e.ColumnIndex == 1) toggle(e.RowIndex); };
+            grid.CellMouseDoubleClick += (sender, e) => { if (e.Button == MouseButtons.Left && e.ColumnIndex == 1) toggle(e.RowIndex); };
+            grid.CellMouseMove += (sender, e) =>
+            {
+                RendererSwitch s;
+                bool hand = e.RowIndex >= 0 && e.ColumnIndex == 1 && rowSwitch.TryGetValue(grid.Rows[e.RowIndex], out s) && s.IsFlag;
+                grid.Cursor = hand ? Cursors.Hand : Cursors.Default;
+            };
+            grid.CellEnter += (sender, e) => { if (e.ColumnIndex == 1) grid.InvalidateCell(e.ColumnIndex, e.RowIndex); };
+            grid.CellLeave += (sender, e) => { if (e.ColumnIndex == 1) grid.InvalidateCell(e.ColumnIndex, e.RowIndex); };
             // Delete or Backspace on a setting returns it to the default.
             grid.KeyDown += (sender, e) =>
             {
                 var cell = grid.CurrentCell;
-                if (cell == null || cell.ColumnIndex != 1 || grid.IsCurrentCellInEditMode || (e.KeyCode != Keys.Delete && e.KeyCode != Keys.Back)) return;
-                if (!rowSwitch.ContainsKey(grid.Rows[cell.RowIndex])) return;
-                cell.Value = cell is DataGridViewComboBoxCell ? (object)DefaultText : "";
+                if (cell == null || cell.ColumnIndex != 1 || grid.IsCurrentCellInEditMode || !rowSwitch.ContainsKey(grid.Rows[cell.RowIndex])) return;
+                if (e.KeyCode == Keys.Space && cell.ReadOnly) { toggle(cell.RowIndex); e.Handled = true; return; }
+                if (e.KeyCode != Keys.Delete && e.KeyCode != Keys.Back) return;
+                cell.Value = "";
                 e.Handled = true;
             };
 
@@ -300,7 +361,7 @@ namespace RyGT
                 loading = true;
                 foreach (var pair in rowSwitch)
                 {
-                    pair.Key.Cells[1].Value = pair.Key.Cells[1] is DataGridViewComboBoxCell ? (object)DefaultText : "";
+                    pair.Key.Cells[1].Value = "";
                     pair.Key.ErrorText = "";
                     Mark(pair.Key, false);
                 }
@@ -330,6 +391,58 @@ namespace RyGT
             };
             page.Resize += delegate { cap(); };
             cap();
+        }
+
+        static readonly string[] OnWords = { "on", "1", "enabled", "true", "yes" };
+        static readonly string[] OffWords = { "off", "0", "disabled", "false", "no", "unset", "not set" };
+
+        static bool StartsWithWord(string text, string word)
+        {
+            if (!text.StartsWith(word, StringComparison.Ordinal)) return false;
+            return text.Length == word.Length || !char.IsLetterOrDigit(text[word.Length]);
+        }
+
+        /// Whether a switch is on when not set, from its description's default; `known` is false when
+        /// the default says neither (then it is drawn off).
+        static bool DefaultOn(RendererSwitch s, out bool known)
+        {
+            string d = s.Default.Trim().ToLowerInvariant();
+            known = true;
+            foreach (var word in OnWords) if (StartsWithWord(d, word)) return true;
+            foreach (var word in OffWords) if (StartsWithWord(d, word)) return false;
+            known = false;
+            return false;
+        }
+
+        static bool IsOn(string value, bool defaultOn)
+        {
+            return value.Length == 0 ? defaultOn : value != "0";
+        }
+
+        /// A switch: a rounded track with a knob, red when set on here, then On or Off, and "(default)"
+        /// while it is not changed.
+        static void PaintToggle(Graphics g, Rectangle cell, RendererSwitch s, string value, Font font)
+        {
+            bool known;
+            bool defaultOn = DefaultOn(s, out known);
+            bool changed = value.Length > 0, on = IsOn(value, defaultOn);
+            var track = new RectangleF(cell.X + 8, cell.Y + (cell.Height - 16) / 2f, 32, 16);
+            var smoothing = g.SmoothingMode;
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            Color fill = on ? (changed ? Dark.Accent : Color.FromArgb(104, 56, 60)) : BoxFill;
+            Dark.FillRounded(g, fill, track, 8);
+            if (!on)
+                using (var path = Dark.RoundedRect(new RectangleF(track.X + 0.5f, track.Y + 0.5f, track.Width - 1, track.Height - 1), 8))
+                using (var pen = new Pen(changed ? Dark.AccentText : BoxEdge))
+                    g.DrawPath(pen, path);
+            float knob = 12, kx = on ? track.Right - knob - 2 : track.X + 2;
+            using (var brush = new SolidBrush(on || changed ? Color.White : Color.FromArgb(170, 170, 170)))
+                g.FillEllipse(brush, kx, track.Y + 2, knob, knob);
+            g.SmoothingMode = smoothing;
+            string text = (on ? "On" : "Off") + (changed ? "" : known ? "  (default)" : "  (default, assumed)");
+            var area = new Rectangle((int)track.Right + 8, cell.Y, cell.Right - (int)track.Right - 10, cell.Height);
+            TextRenderer.DrawText(g, text, font, area, changed ? Dark.AccentText : Dark.DimText,
+                                  TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
         }
 
         static void Mark(DataGridViewRow row, bool changed)
