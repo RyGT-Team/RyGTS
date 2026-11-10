@@ -72,28 +72,18 @@ namespace RyGT
 
         const string InvalidName = "Not saved: names use letters, digits and _ only (no = or spaces).";
 
-        /// The editor: a table of on/off, name and value rows with Add and Remove buttons.
-        /// save is called with the valid rows after every change.
-        public static Control Editor(List<EnvVar> entries, Action<List<EnvVar>> save)
+        /// A table in the launcher's dark colors.
+        public static DataGridView DarkGrid(string accessibleName)
         {
-            var panel = new TableLayoutPanel { ColumnCount = 1, AutoSize = true, Dock = DockStyle.Fill, BackColor = Color.Transparent, Margin = new Padding(0) };
-            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            panel.Controls.Add(new Label
-            {
-                Text = "Set for GTSport.exe when it starts, over the launcher's own. Names: letters, digits and _. " +
-                       "An empty value removes the variable. Restart the game to apply.",
-                AutoSize = true, MaximumSize = new Size(380, 0), ForeColor = Color.Silver, BackColor = Color.Transparent, Margin = new Padding(0, 0, 0, 6)
-            });
-
             var grid = new DataGridView
             {
-                Dock = DockStyle.Fill, Height = 180, Margin = new Padding(0, 0, 0, 6),
+                Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 6),
                 AllowUserToAddRows = false, AllowUserToDeleteRows = true, AllowUserToResizeRows = false,
                 RowHeadersVisible = true, RowHeadersWidth = 24, RowHeadersWidthSizeMode = DataGridViewRowHeadersWidthSizeMode.DisableResizing, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = true,
                 BorderStyle = BorderStyle.None, CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal,
                 ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing, ColumnHeadersHeight = 24,
                 EnableHeadersVisualStyles = false, BackgroundColor = Dark.Field, GridColor = Dark.Border,
-                EditMode = DataGridViewEditMode.EditOnKeystrokeOrF2, AccessibleName = "Custom environment variables"
+                EditMode = DataGridViewEditMode.EditOnKeystrokeOrF2, AccessibleName = accessibleName
             };
             grid.DefaultCellStyle.BackColor = Dark.Field;
             grid.DefaultCellStyle.ForeColor = Dark.Text;
@@ -107,6 +97,24 @@ namespace RyGT
             grid.RowHeadersDefaultCellStyle.SelectionBackColor = Dark.ButtonHover;
             grid.RowHeadersBorderStyle = DataGridViewHeaderBorderStyle.None;
             grid.ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.None;
+            return grid;
+        }
+
+        /// The editor: a table of on/off, name and value rows with Add and Remove buttons.
+        /// save is called with the valid rows after every change.
+        public static Control Editor(List<EnvVar> entries, Action<List<EnvVar>> save)
+        {
+            var panel = new TableLayoutPanel { ColumnCount = 1, AutoSize = true, Dock = DockStyle.Fill, BackColor = Color.Transparent, Margin = new Padding(0) };
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            panel.Controls.Add(new Label
+            {
+                Text = "Set for GTSport.exe when it starts, over the launcher's own. Names: letters, digits and _. " +
+                       "An empty value removes the variable. Restart the game to apply.",
+                AutoSize = true, MaximumSize = new Size(380, 0), ForeColor = Color.Silver, BackColor = Color.Transparent, Margin = new Padding(0, 0, 0, 6)
+            });
+
+            var grid = DarkGrid("Custom environment variables");
+            grid.Dock = DockStyle.Top;
             grid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "on", HeaderText = "On", Width = 36, AutoSizeMode = DataGridViewAutoSizeColumnMode.None });
             grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "name", HeaderText = "Name", FillWeight = 45, AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
             grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "value", HeaderText = "Value", FillWeight = 55, AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
@@ -151,6 +159,21 @@ namespace RyGT
             };
             grid.CellValueChanged += delegate { store(); };
             grid.RowsRemoved += delegate { store(); };
+            // As tall as its rows (one empty row's worth at least); a parent's MaximumSize caps it.
+            Action fit = delegate
+            {
+                int rows = Math.Max(1, grid.Rows.Count);
+                int height = grid.ColumnHeadersHeight + rows * grid.RowTemplate.Height + 2;
+                int max = int.MaxValue;
+                for (Control c = panel; c != null; c = c.Parent)
+                    if (c.MaximumSize.Height > 0) { max = c.MaximumSize.Height - (panel.Height - grid.Height) - 40; break; }
+                grid.Height = Math.Max(grid.ColumnHeadersHeight + grid.RowTemplate.Height + 2, Math.Min(height, max));
+            };
+            grid.RowsAdded += delegate { fit(); };
+            grid.RowsRemoved += delegate { fit(); };
+            panel.Resize += delegate { fit(); };
+            fit();
+            panel.Tag = fit; // the page calls it when its room changes
             panel.Controls.Add(grid);
 
             var buttons = new FlowLayoutPanel { AutoSize = true, BackColor = Color.Transparent, WrapContents = false, Margin = new Padding(0) };
