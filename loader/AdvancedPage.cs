@@ -483,7 +483,10 @@ namespace RyGT
                 grid.CurrentCell = null;
                 grid.Sort(new RowComparer(compare));
                 filter();
-                if (grid.FirstDisplayedScrollingRowIndex > 0) grid.FirstDisplayedScrollingRowIndex = 0;
+                // FIX-GTS-442: back to the top, the first row still shown (row 0 is a heading, hidden
+                // while sorted, and the table throws for a hidden row).
+                int top = grid.Rows.GetFirstRow(DataGridViewElementStates.Visible);
+                if (top >= 0 && grid.FirstDisplayedScrollingRowIndex != top) grid.FirstDisplayedScrollingRowIndex = top;
             };
             filter();
 
