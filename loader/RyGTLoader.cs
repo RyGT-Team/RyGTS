@@ -1286,6 +1286,7 @@ namespace RyGT
             settingsPage.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
             settingsPage.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
             pages[1].Controls.Add(settingsPage);
+            RepaintOnScroll(settingsPage);
             var settingsTitle = PageTitle("Settings", "Saved as you change them; the game reads them when it starts.");
             settingsPage.Controls.Add(settingsTitle, 0, 0);
             settingsPage.SetColumnSpan(settingsTitle, 2);
@@ -1954,6 +1955,7 @@ namespace RyGT
             // controller and keyboard bindings, and racing wheels and pedals (ryty-input.ini /
             // ryty-wheel.ini, read by libScePad).
             var controlsPage = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, AutoScroll = true, Margin = new Padding(0) };
+            RepaintOnScroll(controlsPage);
             controlsPage.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             pages[2].Controls.Add(controlsPage);
             controlsPage.Controls.Add(PageTitle("Controls", "2 players for Arcade's Split Screen: pick each player's name and controller, and what each " +
@@ -2127,13 +2129,42 @@ namespace RyGT
                     bg.FillRectangle(dim, 0, 0, client.Width, client.Height);
             }
             var offset = control == this ? Point.Empty : PointToClient(control.PointToScreen(Point.Empty));
-            g.DrawImageUnscaled(raw ? backdropRaw : backdropDim, -offset.X, -offset.Y);
+            // PERF-GTS-435: copy only the part being painted, unscaled, instead of the whole window's picture.
+            var area = Rectangle.Intersect(Rectangle.Ceiling(g.ClipBounds), new Rectangle(-offset.X, -offset.Y, client.Width, client.Height));
+            if (area.Width <= 0 || area.Height <= 0) return true;
+            var mode = g.CompositingMode;
+            var interpolation = g.InterpolationMode;
+            g.CompositingMode = CompositingMode.SourceCopy;
+            g.InterpolationMode = InterpolationMode.NearestNeighbor;
+            g.DrawImage(raw ? backdropRaw : backdropDim, area, new Rectangle(area.X + offset.X, area.Y + offset.Y, area.Width, area.Height), GraphicsUnit.Pixel);
+            g.CompositingMode = mode;
+            g.InterpolationMode = interpolation;
             return true;
         }
 
         protected override void OnPaintBackground(PaintEventArgs e)
         {
             if (!DrawBackdrop(this, e.Graphics, false)) base.OnPaintBackground(e);
+        }
+
+        // PERF-GTS-435: the whole window is painted bottom-up into one off-screen buffer and shown at
+        // once, so scrolling the see-through pages cannot leave stale or doubled rows behind.
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                var cp = base.CreateParams;
+                cp.ExStyle |= 0x02000000; // WS_EX_COMPOSITED
+                return cp;
+            }
+        }
+
+        /// Scrolling moves the controls but not the window's picture under them, so the copied
+        /// pixels are wrong: repaint the page instead.
+        static void RepaintOnScroll(ScrollableControl page)
+        {
+            page.Scroll += delegate { page.Invalidate(true); };
+            page.MouseWheel += delegate { page.Invalidate(true); };
         }
 
         // Dragging the window edge: the old backdrop and layout stay until it stops, then both update once.
