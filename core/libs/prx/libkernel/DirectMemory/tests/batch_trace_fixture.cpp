@@ -10,11 +10,13 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include "../BatchMapStage.hpp"
+#include "batch-stage-under-test.inc"
 struct KernelBatchMapEntry { void* start; std::uint64_t offset,length; char protection; int operation; };
 #define APS5_VABI
 constexpr int SCE_KERNEL_ERROR_EINVAL=-1;
 static int calls=0, fail_at=-1;
-static int DoMapDirect(void**,std::size_t,int,int,std::int64_t,std::size_t) { return ++calls==fail_at ? -9 : 0; }
+static int DoMapDirect(void**,std::size_t,int,int,std::int64_t,std::size_t) { BatchStageFrame frame; BatchStageTimer timer{0}; timer.Done(); return ++calls==fail_at ? -9 : 0; }
 static int sceKernelMunmap(std::uint64_t,std::size_t) { ++calls; return 0; }
 static int DoMprotect(void*,std::size_t,int) { ++calls; return 0; }
 static int _mapFlexible(void**,std::size_t,int,int) { ++calls; return 0; }
@@ -22,6 +24,18 @@ template<class F> static int GuardMemoryCall(const char*, F f) { try { return f(
 #include "batch-trace-under-test.inc"
 #include "batch-map-under-test.inc"
 int main() {
+ BatchMapStages outer{}, inner{};
+ assert(diag412_set_context(&outer)==nullptr);
+ { BatchStageFrame frame; { BatchStageTimer timer{1}; timer.Done(); }
+   assert(diag412_set_context(&inner)==&outer);
+   { BatchStageFrame nested; BatchStageTimer timer{1}; timer.Done(); }
+   assert(diag412_set_context(&outer)==&inner);
+   try { BatchStageTimer incomplete{2}; throw 1; } catch (...) {}
+ }
+ assert(diag412_set_context(nullptr)==&outer);
+ { BatchStageFrame disabled; BatchStageTimer timer{0}; timer.Done(); }
+ assert(outer.stage[1].attempts==1 && outer.stage[1].completed==1 && inner.stage[1].attempts==0);
+ assert(outer.stage[2].attempts==1 && outer.stage[2].completed==0 && outer.stage[0].attempts==0);
  _putenv_s("RYGT_BATCH_MAP_TRACE","1");
  CreateDirectoryA("logs",nullptr);
  char marker[128]; std::snprintf(marker,sizeof(marker),"logs/batch-map-%lu.capture",GetCurrentProcessId());
@@ -49,8 +63,9 @@ int main() {
  entries[1].operation=0;
  for (int i=0;i<260;++i) assert(sceKernelBatchMap2(entries,3,&processed,0)==0 && processed==3);
  std::fflush(stderr); FILE* log=std::fopen("batch-test.log","r"); assert(log);
- char line[2048]; int count=0; bool partial=false, exception=false;
- while(std::fgets(line,sizeof(line),log)) { ++count; partial |= std::strstr(line,"attempted=2 processed=1 error=-9 exception=0") != nullptr;
-   exception |= std::strstr(line,"attempted=2 processed=1 error=0 exception=1") != nullptr; }
- std::fclose(log); assert(count==256 && partial && exception);
+ char line[2048]; int count=0; bool partial=false, exception=false, stage=false;
+ while(std::fgets(line,sizeof(line),log)) { count += std::strstr(line,"[batch-map] ") != nullptr; partial |= std::strstr(line,"attempted=2 processed=1 error=-9 exception=0") != nullptr;
+   exception |= std::strstr(line,"attempted=2 processed=1 error=0 exception=1") != nullptr;
+   stage |= std::strstr(line,"stage=0 attempts=2 completed=2") != nullptr; }
+ std::fclose(log); assert(count==256 && partial && exception && stage);
 }
