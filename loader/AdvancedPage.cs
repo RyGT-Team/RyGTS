@@ -110,6 +110,45 @@ namespace RyGT
         }
     }
 
+    /// FIX-GTS-440: Tab and Shift+Tab go to the next or previous switch's setting (skipping the
+    /// "When not set" column, headings and hidden rows), also while typing in a value; past the
+    /// last switch Tab leaves the table.
+    sealed class SwitchGrid : DataGridView
+    {
+        public Func<DataGridViewRow, bool> IsSwitch;
+
+        protected override bool ProcessDialogKey(Keys keyData)
+        {
+            if ((keyData & Keys.KeyCode) == Keys.Tab && (keyData & (Keys.Control | Keys.Alt)) == 0)
+                return MoveToSwitch((keyData & Keys.Shift) != 0);
+            return base.ProcessDialogKey(keyData);
+        }
+
+        protected override bool ProcessDataGridViewKey(KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Tab && !e.Control && !e.Alt) return MoveToSwitch(e.Shift);
+            return base.ProcessDataGridViewKey(e);
+        }
+
+        bool MoveToSwitch(bool back)
+        {
+            int step = back ? -1 : 1;
+            int start = CurrentCell != null ? CurrentCell.RowIndex : (back ? Rows.Count : -1);
+            for (int i = start + step; i >= 0 && i < Rows.Count; i += step)
+            {
+                var row = Rows[i];
+                if (!row.Visible || IsSwitch == null || !IsSwitch(row)) continue;
+                CurrentCell = row.Cells[1]; // ends an edit in progress first
+                return true;
+            }
+            // No switch further on: leave the table like any other control.
+            if (IsCurrentCellInEditMode) EndEdit();
+            var form = FindForm();
+            if (form != null) form.SelectNextControl(this, !back, true, true, true);
+            return true;
+        }
+    }
+
     sealed class RowComparer : System.Collections.IComparer
     {
         readonly Comparison<DataGridViewRow> compare;
@@ -180,7 +219,7 @@ namespace RyGT
             // The switches: a group heading row, then one row per switch.
             var card = new Card(cardFill) { Dock = DockStyle.Fill, Padding = new Padding(12), Margin = new Padding(0, 0, 0, 12) };
             card.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            var grid = CustomEnvironment.DarkGrid("Experimental switches");
+            var grid = CustomEnvironment.DarkGrid<SwitchGrid>("Experimental switches");
             grid.Dock = DockStyle.Fill;
             grid.Margin = new Padding(0);
             grid.AllowUserToDeleteRows = false;
@@ -281,6 +320,7 @@ namespace RyGT
             };
             grid.CellValueChanged += (sender, e) => { if (e.RowIndex >= 0 && e.ColumnIndex == 1) apply(grid.Rows[e.RowIndex]); };
             grid.DataError += (sender, e) => { e.ThrowException = false; };
+            grid.IsSwitch = row => rowSwitch.ContainsKey(row);
 
             // Every setting looks like what it is: an on/off switch as a toggle, any other switch (a number,
             // a mask, a name) as a text box, with the default in grey when empty.
