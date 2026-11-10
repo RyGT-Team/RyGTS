@@ -200,9 +200,33 @@ namespace RyGT
 
             // The search box, the filters and Reset all.
             var bar = new FlowLayoutPanel { AutoSize = true, WrapContents = true, BackColor = Color.Transparent, Margin = new Padding(0, 0, 0, 8) };
-            var searchField = new Card(Dark.Field) { AutoSize = false, Width = 260, Height = 30, Radius = 8, Edge = Color.Empty, Padding = new Padding(10, 7, 10, 6), Margin = new Padding(0, 0, 14, 0) };
+            var searchField = new Card(Dark.Field) { AutoSize = false, Width = 260, Height = 30, Radius = 8, Edge = Color.Empty, Padding = new Padding(10, 7, 6, 6), Margin = new Padding(0, 0, 14, 0) };
             var search = new TextBox { Dock = DockStyle.Fill, BorderStyle = BorderStyle.None, Margin = new Padding(0), AccessibleName = "Search switches" };
-            searchField.Controls.Add(search);
+            // FEAT-GTS-441: a clear button at the box's right edge, shown while there is text; Esc
+            // in the box clears it too.
+            var clearSearch = new Label
+            {
+                Text = "\u2715", AutoSize = false, Size = new Size(18, 17), TextAlign = ContentAlignment.MiddleCenter,
+                Font = new Font("Segoe UI Symbol", 8f), ForeColor = Dark.DimText, BackColor = Dark.Field, Tag = "heading",
+                Cursor = Cursors.Hand, Margin = new Padding(4, 0, 0, 0), Visible = false,
+                AccessibleName = "Clear search", AccessibleRole = AccessibleRole.PushButton
+            };
+            clearSearch.MouseEnter += delegate { clearSearch.ForeColor = Dark.Text; };
+            clearSearch.MouseLeave += delegate { clearSearch.ForeColor = Dark.DimText; };
+            clearSearch.Click += delegate { search.Clear(); search.Focus(); };
+            search.KeyDown += (sender, e) =>
+            {
+                if (e.KeyCode != Keys.Escape || search.TextLength == 0) return;
+                search.Clear();
+                e.Handled = e.SuppressKeyPress = true;
+            };
+            search.TextChanged += delegate { clearSearch.Visible = search.TextLength > 0; };
+            searchField.ColumnStyles.Clear();
+            searchField.ColumnCount = 2;
+            searchField.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            searchField.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            searchField.Controls.Add(search, 0, 0);
+            searchField.Controls.Add(clearSearch, 1, 0);
             // The grey hint in the empty box (EM_SETCUEBANNER).
             search.HandleCreated += delegate { SendMessage(search.Handle, 0x1501, new IntPtr(1), "Search names and descriptions"); };
             var showDiagnostics = new DarkCheckBox { Text = "Show diagnostics and tracing", AutoSize = true, Margin = new Padding(0, 6, 14, 0) };
