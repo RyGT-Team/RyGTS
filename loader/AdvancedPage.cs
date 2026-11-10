@@ -33,7 +33,8 @@ namespace RyGT
     /// A switch without a description is still listed; a description without the name is not.
     static class SwitchWalker
     {
-        public const string RendererFile = "libSceVideoOut.prx";
+        // FIX-GTS-439: the game loads the renderer from libs\, so read that copy, not one in the game folder.
+        public const string RendererFile = @"libs\libSceVideoOut.prx";
         public const string DiagnosticsGroup = "Diagnostics & tracing";
         public const string UndescribedGroup = "Not described in this renderer build";
         const string MetadataPrefix = "RYGTSW1|";
