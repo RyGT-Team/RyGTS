@@ -7,7 +7,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\GTToolsSharp\GTToolsSharp\GTToolsSharp.csproj" />
-    <None Include="openGrim.ad;grim.ad" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="openGrim.ad;grim.ad;exitButton.ad" CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="..\GTAdhocToolchain\GTAdhocToolchain.Disasm\GTAdhocToolchain.Disasm.csproj" />
     <ProjectReference Include="..\GTAdhocToolchain\GTAdhocToolchain.CodeGen\GTAdhocToolchain.CodeGen.csproj" />
     <ProjectReference Include="..\GTAdhocToolchain\GTAdhocToolchain.Compiler\GTAdhocToolchain.Compiler.csproj" />

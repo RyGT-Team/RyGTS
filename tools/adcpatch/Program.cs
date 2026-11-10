@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 //   adcpatch thumbnail <THUMBNAIL.ADC> <out.adc>
 //   adcpatch gallery   <GALLERY.ADC> <out.adc>
 //   adcpatch grim      <GRIM.ADC> <out.adc> <grim.ad>
+//   adcpatch components <COMPONENTS.ADC> <out.adc> <exitButton.ad>
 // The output is never larger than the input (the game reads scripts by their original size);
 // it is padded with zeros up to the original size.
 using GTAdhocToolchain.CodeGen;
@@ -121,6 +122,24 @@ static void RemoveRange(List<InstructionBase> ins, int i, int n)
             case InsTryCatch tc when tc.InstructionIndex >= end: tc.InstructionIndex -= n; break;
         }
     }
+}
+
+// Inserts code at ins[i] and moves the frame's jump targets from i on forward by its length.
+static void InsertRange(List<InstructionBase> ins, int i, List<InstructionBase> code)
+{
+    int n = code.Count;
+    foreach (var x in ins)
+    {
+        switch (x)
+        {
+            case InsJump j when j.JumpInstructionIndex >= i: j.JumpInstructionIndex += n; break;
+            case InsJumpIfFalse f when f.JumpIndex >= i: f.JumpIndex += n; break;
+            case InsJumpIfTrue t when t.JumpIndex >= i: t.JumpIndex += n; break;
+            case InsLogicalBase l when l.InstructionJumpIndex >= i: l.InstructionJumpIndex += n; break;
+            case InsTryCatch tc when tc.InstructionIndex >= i: tc.InstructionIndex += n; break;
+        }
+    }
+    ins.InsertRange(i, code);
 }
 
 // Removes debug-build asserts (`if (GetVersionBuild() == "debug") DebugTool::Assert(...)`) and
@@ -405,6 +424,7 @@ if (mode == "all")
         ("thumbnail", "SCRIPTS/GT7SP/THUMBNAIL/THUMBNAIL.ADC", null),
         ("gallery", "PROJECTS/GT7SP/GALLERY/GALLERY.ADC", null),
         ("grim", "SCRIPTS/GT7SP/GRIM/GRIM.ADC", "grim.ad"),
+        ("components", "PROJECTS/GT7SP/COMPONENTS/COMPONENTS.ADC", "exitButton.ad"),
     };
     string work = Path.Combine(Path.GetTempPath(), "rygt-scripts-" + Environment.ProcessId);
     Directory.CreateDirectory(work);
@@ -567,6 +587,51 @@ else if (mode == "gallery")
     ins[at] = new InsBoolConst(true) { LineNumber = ins[at].LineNumber };
     RemoveRange(ins, at + 1, 5);
     Console.WriteLine("requestMyLibrary: user decal folder always listed");
+    Save(file, map, args[1], args[2]);
+}
+else if (mode == "components")
+{
+    // From exitButton.ad: a SystemMenu::ExitButton module (the game has none), so the Top Screen's
+    // greyed-out Exit item saves and closes the game. It goes right before SystemMenu::AppMenu's
+    // first module, next to the other SystemMenu buttons' modules.
+    var file = Load(args[1], out var map);
+    var compiled = Compile(args[3]);
+    var top = file.TopLevelFrame.Instructions;
+    if (top.Any(x => x is InsModuleDefine m && string.Join("::", m.Path.Select(p => p.Name)).EndsWith("SystemMenu::ExitButton")))
+        throw new Exception("COMPONENTS already has a SystemMenu::ExitButton module");
+    int at = top.FindIndex(x => x is InsModuleDefine m && m.Path.Count >= 2 && m.Path[0].Name == "SystemMenu" && m.Path[1].Name == "AppMenu");
+    if (at < 0) throw new Exception("SystemMenu::AppMenu not found");
+    var src = compiled.Instructions;
+    int begin = src.FindIndex(x => x is InsModuleDefine);
+    int end = src.FindIndex(begin + 1, x => x is InsLeaveScope);
+    if (begin < 0 || end < 0) throw new Exception("exitButton.ad has no module");
+    // the module ends with LEAVE + SET_STATE EXIT; without the EXIT, everything after it in the
+    // file would be defined inside SystemMenu::ExitButton
+    if (end + 1 >= src.Count || src[end + 1] is not InsSetState { State: AdhocRunState.EXIT })
+        throw new Exception("exitButton.ad: module does not end with SET_STATE EXIT");
+    var code = src.GetRange(begin, end - begin + 2);
+    // `static onActivate;` inside `module (self)` stands for `delegate onActivate;` (see exitButton.ad)
+    int delegates = 0;
+    foreach (var (_, _, sub) in Subroutines(code).ToList())
+    {
+        var body = sub.CodeFrame.Instructions;
+        for (int i = 1; i < body.Count; i++)
+            if (body[i] is InsStaticDefine sd && sd.Name.Name == "onActivate" && body[i - 1] is InsModuleConstructor)
+            {
+                body[i] = new InsDelegateDefine(sd.Name) { LineNumber = sd.LineNumber };
+                delegates++;
+            }
+    }
+    if (delegates != 1) throw new Exception($"exitButton.ad: {delegates} delegate definitions");
+    foreach (var x in code) RegisterSymbols(x, map, new HashSet<object>(ReferenceEqualityComparer.Instance));
+    var line = top[at].LineNumber;
+    foreach (var x in code) x.LineNumber = line;
+    // room for it: debug-build asserts and DebugTool logging
+    int stripped = StripDebugAll(file);
+    at = top.FindIndex(x => x is InsModuleDefine m && m.Path.Count >= 2 && m.Path[0].Name == "SystemMenu" && m.Path[1].Name == "AppMenu");
+    InsertRange(top, at, code);
+    file.TopLevelFrame.MaxStackSize = Math.Max(file.TopLevelFrame.MaxStackSize, compiled.MaxStackSize);
+    Console.WriteLine($"added SystemMenu::ExitButton ({code.Count} instructions); debug asserts/logs removed: {stripped}");
     Save(file, map, args[1], args[2]);
 }
 else if (mode == "grim")

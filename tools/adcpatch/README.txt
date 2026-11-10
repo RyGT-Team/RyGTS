@@ -16,6 +16,8 @@ built from Polyphony's scripts. Inputs come from the game's volume (GTToolsSharp
   thumbnail  PROJECTS\GT7SP\THUMBNAIL\THUMBNAIL.ADC              no 10/32 KB thumbnail size floor
   gallery    PROJECTS\GT7SP\GALLERY\GALLERY.ADC                  "My Decals" listed offline
   grim       SCRIPTS\GT7SP\GRIM\GRIM.ADC           grim.ad       decal list from <game>\decals\*.svg
+  components PROJECTS\GT7SP\COMPONENTS\COMPONENTS.ADC exitButton.ad Top Screen Exit saves and closes
+                                                                 the game
 
 Build: clone https://github.com/Nenkai/GTAdhocToolchain (3fecc2e) next to this folder as
 ..\GTAdhocToolchain, apply GTAdhocToolchain-exact-roundtrip.patch (symbol ids by name, so an

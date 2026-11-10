@@ -1,0 +1,32 @@
+// ryGT: SystemMenu::ExitButton for COMPONENTS.ADC (v1.69). The Top Screen's GT menu has an Exit
+// item ("Close this mode and return to the Top Screen") that the game greys out there: you are
+// already on the Top Screen, and a PS4 game does not close itself. On PC it saves the game and
+// closes it instead, through the game's own exit (the main loop's ExitGame, as when the game's
+// rights check fails). In the game modes, where Exit returns to the Top Screen, the button is not
+// greyed out and the menu's own handler (SystemMenu::AppMenu's alias_Exit) stays as it is.
+module SystemMenu::ExitButton
+{
+    method onInitialize(context)
+    {
+        if (self.insensitive)
+        {
+            self.insensitive = false;
+            // `delegate onActivate;`: written as a static, which adcpatch turns into the delegate
+            // definition (the toolchain refuses delegates for version 12 by mistake).
+            module (self) { static onActivate; }
+            self.onActivate += quitGame;
+        }
+    }
+
+    method quitGame(context)
+    {
+        sound.play("ok");
+        FunctionManager::call("SaveData::saveGame");
+        // The shutdown (main's execShutdown) finalizes the online service through
+        // Grim3.clearCallback, which this build of the game does not have: a fatal script error
+        // after the save. Offline there is nothing to finalize, so the shutdown skips it.
+        main::Grim3 = nil;
+        pdiext::MSystemCondition::ExitGame();
+        return 2;
+    }
+}
