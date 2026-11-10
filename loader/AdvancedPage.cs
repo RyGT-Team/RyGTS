@@ -1,4 +1,4 @@
-// FEAT-GTS-437: the Advanced page. The experimental renderer and runtime switches (RYGT_* environment
+// FEAT-GTS-437: the Advanced page. The experimental renderer and runtime switches (RYGT_* and SHADGT_* environment
 // variables read by shadGT and RyGTS) as one table with a description on hover, and a table for any
 // other variable. All of them are saved in RyGT.ini as env= lines and set for GTSport.exe when the
 // launcher starts it (CustomEnvironment.Apply).
@@ -13,7 +13,7 @@ using System.Windows.Forms;
 
 namespace RyGT
 {
-    /// One RYGT_* switch found in the renderer (libSceVideoOut.prx).
+    /// One RYGT_* or SHADGT_* switch found in the renderer (libSceVideoOut.prx).
     class RendererSwitch
     {
         public string Name = "", Kind = "", Default = "", Values = "", Tooltip = "", Group = "";
@@ -26,7 +26,7 @@ namespace RyGT
     /// FEAT-GTS-437: finds the switches in the renderer file instead of a list in the launcher, so a
     /// new switch appears as soon as the renderer reads it. Reads the file (never loads it) and
     /// collects:
-    /// - every string that is exactly RYGT_ and capitals, digits and _ (the names the renderer passes
+    /// - every string that is exactly RYGT_ or SHADGT_ and capitals, digits and _ (the names the renderer passes
     ///   to getenv), and
     /// - every "RYGTSW1|NAME|kind|group|default|values|description" string: the renderer's own
     ///   description of a switch (src/common/rygt_switches.cpp in shadGT).
@@ -61,8 +61,8 @@ namespace RyGT
             {
                 // Strings may follow other data directly (the compiler packs them), so only a name
                 // character right before rules a match out.
-                if (data[i] != (byte)'R' || (i > 0 && IsNameByte(data[i - 1]))) continue;
-                if (data[i + 1] != (byte)'Y' || data[i + 2] != (byte)'G' || data[i + 3] != (byte)'T') continue;
+                if ((data[i] != (byte)'R' && data[i] != (byte)'S') || (i > 0 && IsNameByte(data[i - 1]))) continue;
+                if (!StartsWith(data, i, "RYGT") && !StartsWith(data, i, "SHADGT_")) continue;
                 int end = i;
                 while (end < data.Length && data[end] != 0 && end - i < 4096) ++end;
                 if (end >= data.Length || data[end] != 0) continue;
@@ -73,8 +73,7 @@ namespace RyGT
                     var entry = Parse(text.Substring(MetadataPrefix.Length));
                     if (entry != null) described[entry.Name] = entry;
                 }
-                else if (text.Length > 5 && text.StartsWith("RYGT_", StringComparison.Ordinal) && CustomEnvironment.IsValidName(text) &&
-                         text.ToUpperInvariant() == text)
+                else if (IsSwitchName(text))
                     names.Add(text);
             }
 
@@ -90,6 +89,25 @@ namespace RyGT
             }
             Func<string, int> order = group => { int i = Array.IndexOf(GroupOrder, group); return i < 0 ? GroupOrder.Length - 2 : i; };
             return list.OrderBy(s => order(s.Group)).ThenBy(s => s.Group, StringComparer.Ordinal).ThenBy(s => s.Name, StringComparer.Ordinal).ToList();
+        }
+
+        /// The prefixes of the renderer's switches: RYGT_ (ryGT's) and SHADGT_ (shadGT's, FEAT-GTS-443).
+        static readonly string[] NamePrefixes = { "RYGT_", "SHADGT_" };
+
+        static bool IsSwitchName(string text)
+        {
+            if (!CustomEnvironment.IsValidName(text) || text.ToUpperInvariant() != text) return false;
+            foreach (var prefix in NamePrefixes)
+                if (text.Length > prefix.Length && text.StartsWith(prefix, StringComparison.Ordinal)) return true;
+            return false;
+        }
+
+        static bool StartsWith(byte[] data, int at, string prefix)
+        {
+            if (at + prefix.Length > data.Length) return false;
+            for (int k = 0; k < prefix.Length; ++k)
+                if (data[at + k] != (byte)prefix[k]) return false;
+            return true;
         }
 
         static bool IsNameByte(byte b)
@@ -323,7 +341,7 @@ namespace RyGT
                 foreach (var heading in headings) heading.Key.Visible = sortColumn < 0 && visibleGroups.Contains(heading.Value);
                 grid.ResumeLayout();
                 count.Text = walkError != null ? "Could not read " + SwitchWalker.RendererFile + ": " + walkError
-                           : catalog.Count == 0 ? "No RYGT_ switches found in " + SwitchWalker.RendererFile
+                           : catalog.Count == 0 ? "No RYGT_ or SHADGT_ switches found in " + SwitchWalker.RendererFile
                            : shown + " of " + catalog.Count + " switches, " + values.Count + " changed";
             };
 
