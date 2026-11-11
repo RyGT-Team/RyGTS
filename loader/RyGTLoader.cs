@@ -1977,6 +1977,13 @@ namespace RyGT
 
             var shaders = Section(left, "Shaders");
             AddOption(shaders, "Precompile shaders on the splash screen", "GPU", "precompile_shaders", true);
+            // FEAT-GTS-445 (from RyGT7's PERF-GT7-111/117 and PERF-GT7-108; RyGT-Team/rygt7#3): shader
+            // pre-translation (RYGT_MANIFEST_RECORD / RYGT_MANIFEST_PRETRANSLATE) and the compile pack
+            // (RYGT_COMPILE_PACK), both off unless checked.
+            AddOption(shaders, "Rebuild translated shaders in the background after a renderer update",
+                      "GPU", "shader_pretranslate", false);
+            AddOption(shaders, "Compile the shaders already seen on this PC at start, after a driver update (needs shader objects; may pause races)",
+                      "GPU", "compile_pack", false);
             // What the game does while a new shader compiles during play (GPU.compile_mode).
             var modeRow = new FlowLayoutPanel { AutoSize = true, BackColor = Color.Transparent, Margin = new Padding(0, 4, 0, 2), WrapContents = false };
             var modeLabel = new Label { Text = "When new shaders compile", AutoSize = false, Width = 196, Height = 20, BackColor = Color.Transparent, Margin = new Padding(0, 6, 8, 0) };
@@ -3634,7 +3641,9 @@ namespace RyGT
                     bool antiLag = ReadSetting("GPU", "anti_lag", false) &&
                                    !ReadSetting("GPU", "framegen_enabled", false) &&
                                    !ReadSetting("GPU", "dlssg_enabled", false);
-                    StartGame(root, settings.HddStreaming, experimentalSceneSize, antiLag, CustomEnvironment.Copy(settings.Env));
+                    StartGame(root, settings.HddStreaming, experimentalSceneSize, antiLag,
+                              ReadSetting("GPU", "shader_pretranslate", false), ReadSetting("GPU", "compile_pack", false),
+                              CustomEnvironment.Copy(settings.Env));
                     status.Text = "GT Sport is starting. Logs: logs\\stdout.log and logs\\stderr.log.";
                 }));
             });
@@ -3644,7 +3653,8 @@ namespace RyGT
 
         /// Starts GTSport.exe with session log rotation and waits for GPU recovery if Vulkan loses
         /// its device.
-        static void StartGame(string root, bool hddStreaming, Size? sceneSize, bool antiLag, List<EnvVar> customEnv)
+        static void StartGame(string root, bool hddStreaming, Size? sceneSize, bool antiLag, bool shaderPretranslate,
+                              bool compilePack, List<EnvVar> customEnv)
         {
             string exe = Path.Combine(root, "GTSport.exe");
             // Preserve GT Sport metadata while migrating the launcher publisher field from older installs.
@@ -3677,6 +3687,19 @@ namespace RyGT
                         start.EnvironmentVariables["RYGT_LOG_DIRECTORY"] = logDirectory;
                         start.EnvironmentVariables["RYGT_HDD_STREAMING"] = hddStreaming ? "1" : "0";
                         start.EnvironmentVariables["RYGT_ANTI_LAG"] = antiLag ? "1" : "0"; // PERF-210
+                        // FEAT-GTS-445 from the Shaders card. Pre-translation: each shader translation leaves
+                        // a record (shaders\<serial>.manifest) and its code (shaders\<serial>.capture, this
+                        // PC's only); at start, the ones the shader store lacks (after a renderer update)
+                        // are translated again in the background. The compile pack: the pipelines this PC's
+                        // driver cache lacks (after a driver update) are compiled at start from the recipes
+                        // kept. Only when checked, so a script that sets them itself keeps its setting (and
+                        // the Advanced page, applied below, still wins).
+                        if (shaderPretranslate)
+                        {
+                            start.EnvironmentVariables["RYGT_MANIFEST_RECORD"] = "1";
+                            start.EnvironmentVariables["RYGT_MANIFEST_PRETRANSLATE"] = "1";
+                        }
+                        if (compilePack) start.EnvironmentVariables["RYGT_COMPILE_PACK"] = "1";
                         // FEAT-GTS-433: the user's list last, so it wins; only the count is logged.
                         int custom = CustomEnvironment.Apply(start, customEnv);
                         if (custom > 0) AppendSetupLog(root, custom + " custom environment variable(s) applied.");
