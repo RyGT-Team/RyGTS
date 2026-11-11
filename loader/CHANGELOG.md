@@ -6,7 +6,7 @@ The version lives in `loader/Version.cs`. To release a change, bump
 `LauncherVersion.Value` there and add a section here with the same number;
 CI fails when the two disagree.
 
-## 0.2.0 - 2026-11-12
+## 0.1.1 - 2026-11-12
 
 * New launcher look, ported from ryGT7's launcher: a full-window home view with the
   background pictures (slowly drifting, and fading between `launcherackground*.png`
