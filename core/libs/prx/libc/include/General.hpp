@@ -14,7 +14,7 @@ extern "C" void NotImplemented_nid_no_patch(const char* funcName);
 extern "C" void CxaFinalize_nid_no_patch(void* dsoHandle);
 
 extern "C" std::filesystem::path ResolvePath_nid_no_patch(const char* path);
-// FEAT-GTS-470: a folder under /app0 is the update's and the base game's folders together. Fills
+// FEAT-GTS-259: a folder under /app0 is the update's and the base game's folders together. Fills
 // `entries` (host path, is a folder) with the merged contents and returns true for such a folder;
 // false when `path` is not one (list the folder ResolvePath gives, as before).
 extern "C" bool ListLayeredDirectory_nid_no_patch(const char* path, std::vector<std::pair<std::filesystem::path, bool>>* entries);

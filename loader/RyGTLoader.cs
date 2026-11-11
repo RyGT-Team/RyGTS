@@ -3773,7 +3773,7 @@ namespace RyGT
             }
         }
 
-        // FEAT-GTS-470: the game reads /app0 straight from the update and base game folders (named in
+        // FEAT-GTS-259: the game reads /app0 straight from the update and base game folders (named in
         // RyGT.ini; see core/libs/prx/libc/include/AppOverlay.hpp), so nothing is linked into app0 any
         // more. Set up from earlier versions linked every game file there (hard links, which Explorer
         // counts as a second copy of the game); those links are removed. Only links are: a file is
@@ -3849,7 +3849,7 @@ namespace RyGT
         }
 
         /// The first of the game's folders that has `name` at its top: RyGTS\app0 (what Set up made),
-        /// the update, then the base game, in the order the game looks (FEAT-GTS-470).
+        /// the update, then the base game, in the order the game looks (FEAT-GTS-259).
         string GameFile(string name)
         {
             var folders = new List<string> { Path.Combine(root, "app0") };

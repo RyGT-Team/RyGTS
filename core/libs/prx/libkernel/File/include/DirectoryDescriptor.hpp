@@ -9,7 +9,7 @@
 namespace File {
 
 int OpenDirectoryDescriptor(const std::filesystem::path& path);
-// FEAT-GTS-470: a folder under /app0 made of several host folders, listed from `entries`
+// FEAT-GTS-259: a folder under /app0 made of several host folders, listed from `entries`
 // (host path, is a folder) instead of from `path`.
 int OpenDirectoryDescriptor(const std::filesystem::path& path,
                             std::vector<std::pair<std::filesystem::path, bool>> entries);

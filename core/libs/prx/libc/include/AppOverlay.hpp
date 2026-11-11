@@ -1,7 +1,7 @@
 #ifndef CORE_LIBS_PRX_LIBC_INCLUDE_APPOVERLAY_HPP
 #define CORE_LIBS_PRX_LIBC_INCLUDE_APPOVERLAY_HPP
 
-// FEAT-GTS-470: /app0 read straight from the game's folders. Before, Set up linked every game file
+// FEAT-GTS-259: /app0 read straight from the game's folders. Before, Set up linked every game file
 // into RyGTS\app0 (hard links, or symbolic links across drives), which Explorer counts as a second
 // copy of the game. Now /app0 is a stack of folders searched in order, like a PS4 lays an update
 // over the base game:

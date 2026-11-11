@@ -25,7 +25,7 @@ int DirectoryError(int error) {
 struct Directory {
     DIR* native = nullptr;
     std::filesystem::path path;
-    // FEAT-GTS-470: a folder under /app0 made of several host folders is listed from here instead.
+    // FEAT-GTS-259: a folder under /app0 made of several host folders is listed from here instead.
     bool layered = false;
     std::vector<std::filesystem::path> layeredEntries;
     std::size_t cursor = 0;

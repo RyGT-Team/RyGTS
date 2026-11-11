@@ -58,12 +58,12 @@ struct WorkingDirectory {
     std::mutex mutex;
     const std::filesystem::path root = std::filesystem::canonical(std::filesystem::current_path());
     // The guest's current directory as a path under root. Under /app0 it may name a folder that only
-    // exists in the update or base game folder (FEAT-GTS-470), so it is not always a real folder.
+    // exists in the update or base game folder (FEAT-GTS-259), so it is not always a real folder.
     std::filesystem::path current = root;
 };
 WorkingDirectory& Directories() { static WorkingDirectory state; return state; }
 
-// FEAT-GTS-470: /app0 searched through RyGTS\app0, the update and the base game (AppOverlay.hpp).
+// FEAT-GTS-259: /app0 searched through RyGTS\app0, the update and the base game (AppOverlay.hpp).
 Libc::AppOverlay& App0() {
     static Libc::AppOverlay overlay = [] {
         const auto& root = Directories().root;

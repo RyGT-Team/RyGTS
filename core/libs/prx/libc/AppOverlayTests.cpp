@@ -1,4 +1,4 @@
-// FEAT-GTS-470: /app0 searched through RyGTS\app0, the update and the base game (AppOverlay.hpp).
+// FEAT-GTS-259: /app0 searched through RyGTS\app0, the update and the base game (AppOverlay.hpp).
 // Standalone: g++ -std=c++20 -I<core/libs> AppOverlayTests.cpp src/AppOverlay.cpp
 #include "prx/libc/include/AppOverlay.hpp"
 
