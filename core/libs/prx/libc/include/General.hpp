@@ -1,6 +1,7 @@
 #ifndef CORE_LIBS_PRX_LIBC_INCLUDE_GENERAL_HPP
 #define CORE_LIBS_PRX_LIBC_INCLUDE_GENERAL_HPP
 
+#include <cstdio>
 #include <stdexcept>
 #include <filesystem>
 #include <utility>
@@ -18,6 +19,17 @@ extern "C" std::filesystem::path ResolvePath_nid_no_patch(const char* path);
 // `entries` (host path, is a folder) with the merged contents and returns true for such a folder;
 // false when `path` is not one (list the folder ResolvePath gives, as before).
 extern "C" bool ListLayeredDirectory_nid_no_patch(const char* path, std::vector<std::pair<std::filesystem::path, bool>>* entries);
+// FEAT-GTS-259: whether a resolved host path is in the player's update or base game folder.
+extern "C" bool IsGameFolderPath_nid_no_patch(const std::filesystem::path& host);
+
+// /app0 is read-only on the PS4, and its files are now the player's own game files in their game
+// folders (FEAT-GTS-259): changing one (delete, rename, truncate, write, chmod, utimes) would change
+// the dump itself. Such calls fail as on the PS4 (EROFS) and are reported.
+inline bool IsReadOnlyGamePath(const std::filesystem::path& resolved, const char* operation, const char* guestPath) {
+    if (!IsGameFolderPath_nid_no_patch(resolved)) return false;
+    std::fprintf(stderr, "[file] %s %s refused: /app0 is read-only\n", operation, guestPath ? guestPath : "");
+    return true;
+}
 // Guest path aliases: a guest prefix such as "/savedata0" (a save-data mount point) resolves to a host
 // directory instead of the run directory; the prefix matches whole path components only.
 extern "C" void AddPathAlias_nid_no_patch(const char* guestPrefix, const char* hostPath);

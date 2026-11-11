@@ -41,6 +41,10 @@ public:
     /// in later ones), or nothing when no layer has that folder.
     std::optional<std::vector<Entry>> List(const std::string& relative);
 
+    /// Whether `host` is in the update or base game folder (or is one of them): the player's own
+    /// game files, which the game must never change. /app0 is read-only on a PS4 anyway.
+    bool InGameFolder(const std::filesystem::path& host) const;
+
 private:
     struct Name {
         std::filesystem::path actual; // as spelled on disk

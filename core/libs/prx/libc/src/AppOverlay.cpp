@@ -111,6 +111,18 @@ std::optional<std::vector<AppOverlay::Entry>> AppOverlay::List(const std::string
     return entries;
 }
 
+bool AppOverlay::InGameFolder(const std::filesystem::path& host) const {
+    if (lower.empty() || host.empty()) return false;
+    const auto path = Fold(host.lexically_normal().make_preferred().native());
+    for (const auto& layer : lower) {
+        auto folder = Fold(layer.lexically_normal().make_preferred().native());
+        while (!folder.empty() && (folder.back() == '\\' || folder.back() == '/')) folder.pop_back();
+        if (path.size() < folder.size() || path.compare(0, folder.size(), folder) != 0) continue;
+        if (path.size() == folder.size() || path[folder.size()] == '\\' || path[folder.size()] == '/') return true;
+    }
+    return false;
+}
+
 namespace {
 
 std::filesystem::path FromUtf8(std::string_view text) {

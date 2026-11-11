@@ -5,7 +5,7 @@ log and the existing documentation.
 
 ## Unreleased
 
-* FEAT-GTS-259: The game reads `/app0` straight from the game and update folders (`game=` and `update=` in `RyGT.ini`) instead of from links in `RyGTS\app0`, which Explorer counted as a second copy of the game. `RyGTS\app0` now only holds the converted `sce_module`; the update's files win over the base game's, folder by folder and file by file. The RyGTS folder no longer has to be on the game's drive, and Developer Mode is never needed.
+* FEAT-GTS-259: The game reads `/app0` straight from the game and update folders (`game=` and `update=` in `RyGT.ini`) instead of from links in `RyGTS\app0`, which Explorer counted as a second copy of the game. `RyGTS\app0` now only holds the converted `sce_module`; the update's files win over the base game's, folder by folder and file by file. The game can no longer change, delete or rename the player's game files (EROFS, as on a PS4). The RyGTS folder no longer has to be on the game's drive, and Developer Mode is never needed.
 * Enable shader precompilation and persistent pipeline caching in packaged defaults, including the 16 GB preset inherited from the runtime bundle.
 
 ### Renderer streaming and CPU recording

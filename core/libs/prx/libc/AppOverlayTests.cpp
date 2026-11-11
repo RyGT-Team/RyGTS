@@ -90,6 +90,13 @@ int main() {
     Check(!overlay.List("nothing-here"), "a folder no layer has can't be listed");
     Check(!overlay.List("gt.idx"), "a file can't be listed");
 
+    Check(overlay.InGameFolder(overlay.Resolve("gt00.vol")), "a base game file is the player's");
+    Check(overlay.InGameFolder(overlay.Resolve("GT.IDX")), "an update file is the player's");
+    Check(overlay.InGameFolder(base), "the base game folder itself is the player's");
+    Check(!overlay.InGameFolder(overlay.Resolve("sce_module/libc.prx")), "RyGTS\\app0 is not the player's");
+    Check(!overlay.InGameFolder(overlay.Resolve("new-file.txt")), "a new file goes to RyGTS\\app0");
+    Check(!overlay.InGameFolder(root / "Games" / "CUSA03220-other" / "gt.idx"), "a sibling folder with a longer name is not inside");
+
     Libc::AppOverlay single(top, {});
     Check(!single.Layered() && single.Resolve("gt.idx") == top / "gt.idx" && !single.List(""),
           "without game folders /app0 is RyGTS\\app0 alone, as before");

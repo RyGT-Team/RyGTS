@@ -145,6 +145,10 @@ extern "C" {
 int APS5_VABI sceKernelOpen(const char* path, int flags, std::uint16_t mode) {
     APS5_LOG_TRACE("path=%s flags=0x%X nativeFlags=0x%X mode=0%o", path, flags, MapFlags(flags), mode);
     auto native = ResolvePath_nid_no_patch(path);
+    if (((flags & SCE_KERNEL_O_ACCMODE) != SCE_KERNEL_O_RDONLY || (flags & SCE_KERNEL_O_TRUNC) != 0) &&
+        IsReadOnlyGamePath(native, "write open", path)) {
+        return SceErrorFromErrno(30); // EROFS
+    }
     int nativeFlags = MapFlags(flags);
 #ifdef _WIN32
     if (File::HddStreamingEnabled() && File::IsStreamingGamePath(path) &&
@@ -259,6 +263,9 @@ int APS5_VABI sceKernelUnlink(const char* path) {
         throw std::invalid_argument(std::string(__func__) + ": path is null");
     }
     auto native = ResolvePath_nid_no_patch(path);
+    if (IsReadOnlyGamePath(native, "unlink", path)) {
+        return SceErrorFromErrno(30); // EROFS
+    }
     if (NativeUnlink(native) != 0) {
         return SceErrorFromErrno(errno);
     }

@@ -153,6 +153,10 @@ extern "C" std::filesystem::path ResolvePath_nid_no_patch(const char* path) {
     return Resolve(state, path);
 }
 
+extern "C" bool IsGameFolderPath_nid_no_patch(const std::filesystem::path& host) {
+    return App0().InGameFolder(host);
+}
+
 extern "C" bool ListLayeredDirectory_nid_no_patch(const char* path, std::vector<std::pair<std::filesystem::path, bool>>* entries) {
     if (!path || !entries) { APS5_INVALID_ARG_EX; }
     auto& state = Directories();
