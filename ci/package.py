@@ -17,6 +17,15 @@ BASE_FOLDER = 'GTSport-Ryty-shadGT-2026-10-25-prerelease'
 FORBIDDEN = {'.self', '.elf', '.sprx', '.pkg', '.vol', '.adc', '.log', '.pdb'}
 
 
+def launcher_version(source_root):
+    """LauncherVersion.Value from loader/Version.cs, or None when the source has no such file."""
+    path = Path(source_root) / 'loader/Version.cs'
+    if not path.is_file():
+        return None
+    match = re.search(r'public const string Value = "([^"]+)";', path.read_text(encoding='utf-8-sig'))
+    return match.group(1) if match else None
+
+
 def sha(path):
     with path.open('rb') as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
@@ -137,7 +146,8 @@ def assemble(base, commit, flavor, channel, suffix):
     provenance = dict(commit=commit, flavor=flavor, channel=channel,
         configuration='RelWithDebInfo' if suffix else 'Release', optimized=True,
         pipeline=os.environ.get('CI_PIPELINE_URL'), runtime_base_url=BASE_URL, runtime_base_sha256=BASE_SHA,
-        renderer_source=source, launcher_sha256=sha(launcher), renderer_sha256=sha(renderer),
+        renderer_source=source, launcher_version=launcher_version(root), launcher_sha256=sha(launcher),
+        renderer_sha256=sha(renderer),
         rebuilt=['RyGTS.exe', 'libs/libSceVideoOut.prx'],
         retained='Other runtime libraries and Windows conversion helpers from pinned October 25 archive')
     if suffix:

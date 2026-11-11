@@ -1167,7 +1167,7 @@ namespace RyGT
             footer.Controls.Add(status, 0, 0);
             footer.Controls.Add(new Label
             {
-                Text = "RyGTS for Windows " + (char)183 + " GT Sport 1.69", AutoSize = true, Anchor = AnchorStyles.Right, ForeColor = Dark.AccentText,
+                Text = "RyGTS " + LauncherVersion.Value + " for Windows " + (char)183 + " GT Sport 1.69", AutoSize = true, Anchor = AnchorStyles.Right, ForeColor = Dark.AccentText,
                 Tag = "heading", Font = new Font("Segoe UI Semibold", 8.5f), Margin = new Padding(0)
             }, 1, 0);
 
@@ -2860,7 +2860,11 @@ namespace RyGT
             {
                 try
                 {
-                    if (setupLogPath == null) setupLogPath = LogFiles.Prepare(root, "setup.log");
+                    if (setupLogPath == null)
+                    {
+                        setupLogPath = LogFiles.Prepare(root, "setup.log");
+                        File.AppendAllText(setupLogPath, LauncherVersion.Banner + Environment.NewLine);
+                    }
                     File.AppendAllText(setupLogPath, line + Environment.NewLine);
                 }
                 catch { }
