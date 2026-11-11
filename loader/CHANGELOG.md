@@ -6,6 +6,18 @@ The version lives in `loader/Version.cs`. To release a change, bump
 `LauncherVersion.Value` there and add a section here with the same number;
 CI fails when the two disagree.
 
+## 0.2.0 - 2026-11-12
+
+* New launcher look, ported from ryGT7's launcher: a full-window home view with the
+  background pictures (slowly drifting, and fading between `launcherackground*.png`
+  when there are several), the title or `launcher\logo.png`, Play and a settings button.
+* The settings open on their own view with a sidebar of pages: Game (files, Set up and
+  its log), Display, Graphics, Shaders, Controls, Advanced and About (folders, logging,
+  and showing the Advanced page). The top tabs and the quick-access panel are gone.
+* Settings are full-width rows with switches, drop-downs and sliders under spaced
+  capital headings; buttons are outlined, and views change with a short fade.
+* Every setting is kept with the same keys and files; only where it is shown changed.
+
 ## 0.1.0 - 2026-11-11
 
 * First tracked launcher version.
