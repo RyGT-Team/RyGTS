@@ -16,6 +16,7 @@ using System.Threading;
 using System.Windows.Forms;
 
 [assembly: System.Reflection.AssemblyCompany("RyGT-Team")]
+[assembly: System.Reflection.AssemblyCopyright("Copyright © 2026 RyGT-Team")]
 [assembly: System.Reflection.AssemblyProduct("RyGTS")]
 [assembly: System.Reflection.AssemblyTitle("RyGTS Launcher")]
 [assembly: System.Reflection.AssemblyDescription("Gran Turismo Sport launcher for Windows")]
