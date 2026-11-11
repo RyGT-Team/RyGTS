@@ -183,14 +183,37 @@ namespace RyGT
 
         /// Builds the page into `page`. `env` is the saved list (RyGT.ini env= lines); `save` gets the
         /// new full list after every change.
+        /// FEAT-GTS-467: what Refresh keeps of the page while it reads the renderer again.
+        sealed class ViewState
+        {
+            public string Search = "";
+            public bool Diagnostics, OnlyChanged;
+        }
+
         public static void Build(TableLayoutPanel page, Control title, Color cardFill, string root, List<EnvVar> env, Action<List<EnvVar>> save)
         {
+            Build(page, title, cardFill, root, env, save, null);
+        }
+
+        static void Build(TableLayoutPanel page, Control title, Color cardFill, string root, List<EnvVar> env, Action<List<EnvVar>> save,
+                          ViewState view)
+        {
             string rendererPath = Path.Combine(root, SwitchWalker.RendererFile);
+            // The list as last saved, for Refresh (the env passed in is the one at build time).
+            var savedEnv = env;
+            Action<List<EnvVar>> keep = list => { savedEnv = list; save(list); };
             List<RendererSwitch> catalog;
             string walkError = null;
             try { catalog = SwitchWalker.Walk(rendererPath); }
             catch (Exception e) { catalog = new List<RendererSwitch>(); walkError = e.Message; }
             var known = new HashSet<string>(catalog.Select(s => s.Name));
+            string rendererDate = "";
+            try
+            {
+                if (File.Exists(rendererPath))
+                    rendererDate = " \u00B7 renderer from " + File.GetLastWriteTime(rendererPath).ToString("MM-dd HH:mm", CultureInfo.InvariantCulture);
+            }
+            catch { }
             // name -> value for the switches in the table; everything else stays in the other table.
             var values = new Dictionary<string, string>();
             var others = new List<EnvVar>();
@@ -209,7 +232,7 @@ namespace RyGT
                     if (values.TryGetValue(s.Name, out value)) list.Add(new EnvVar { Name = s.Name, Value = value });
                 }
                 list.AddRange(others);
-                save(list);
+                keep(list);
             };
 
             page.ColumnCount = 1;
@@ -250,11 +273,19 @@ namespace RyGT
             var showDiagnostics = new DarkCheckBox { Text = "Show diagnostics and tracing", AutoSize = true, Margin = new Padding(0, 6, 14, 0) };
             var onlyChanged = new DarkCheckBox { Text = "Only changed", AutoSize = true, Margin = new Padding(0, 6, 14, 0) };
             var reset = new Button { Text = "Reset all", AutoSize = true, Margin = new Padding(0, 1, 0, 0) };
+            // FEAT-GTS-467: read the renderer again (after a rebuild or a new libs\libSceVideoOut.prx)
+            // without restarting the launcher.
+            var refresh = new Button { Text = "Refresh", AutoSize = true, Margin = new Padding(8, 1, 0, 0), AccessibleName = "Refresh switches" };
+            var barTips = new ToolTip();
+            barTips.SetToolTip(refresh, "Read the switches and their descriptions again from " + SwitchWalker.RendererFile +
+                                        ", e.g. after the renderer was rebuilt. Your settings are kept.");
+            refresh.Disposed += delegate { barTips.Dispose(); };
             var count = new Label { AutoSize = true, ForeColor = Dark.DimText, Tag = "heading", BackColor = Color.Transparent, Margin = new Padding(14, 7, 0, 0) };
             bar.Controls.Add(searchField);
             bar.Controls.Add(showDiagnostics);
             bar.Controls.Add(onlyChanged);
             bar.Controls.Add(reset);
+            bar.Controls.Add(refresh);
             bar.Controls.Add(count);
             page.Controls.Add(bar);
 
@@ -342,7 +373,7 @@ namespace RyGT
                 grid.ResumeLayout();
                 count.Text = walkError != null ? "Could not read " + SwitchWalker.RendererFile + ": " + walkError
                            : catalog.Count == 0 ? "No RYGT_ or SHADGT_ switches found in " + SwitchWalker.RendererFile
-                           : shown + " of " + catalog.Count + " switches, " + values.Count + " changed";
+                           : shown + " of " + catalog.Count + " switches, " + values.Count + " changed" + rendererDate;
             };
 
             Action<DataGridViewRow> apply = row =>
@@ -569,8 +600,38 @@ namespace RyGT
                 var refit = otherEditor.Tag as Action;
                 if (refit != null) refit();
             };
-            page.Resize += delegate { cap(); };
+            EventHandler onResize = delegate { cap(); };
+            page.Resize += onResize;
             cap();
+
+            // FEAT-GTS-467: Refresh builds the page again from a fresh read of the renderer, keeping the
+            // saved settings (as last saved), the search text and the two filters.
+            refresh.Click += delegate
+            {
+                if (grid.IsCurrentCellInEditMode) grid.EndEdit();
+                var keepView = new ViewState { Search = search.Text, Diagnostics = showDiagnostics.Checked, OnlyChanged = onlyChanged.Checked };
+                var form = page.FindForm();
+                page.SuspendLayout();
+                page.Resize -= onResize;
+                var old = new List<Control>();
+                foreach (Control control in page.Controls) if (control != title) old.Add(control);
+                page.Controls.Clear();
+                page.RowStyles.Clear();
+                page.ColumnStyles.Clear();
+                foreach (var control in old) control.Dispose();
+                Build(page, title, cardFill, root, savedEnv, save, keepView);
+                Dark.Apply(page);
+                if (cardFill.A < 255) Dark.SeeThrough(page);
+                page.ResumeLayout(true);
+                page.Invalidate(true);
+                if (form != null) form.ActiveControl = null;
+            };
+            if (view != null)
+            {
+                search.Text = view.Search;
+                showDiagnostics.Checked = view.Diagnostics;
+                onlyChanged.Checked = view.OnlyChanged;
+            }
         }
 
         static readonly string[] OnWords = { "on", "1", "enabled", "true", "yes" };
