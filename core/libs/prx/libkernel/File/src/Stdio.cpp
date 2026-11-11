@@ -183,6 +183,7 @@ static constexpr int GUEST_EINVAL = 22;
 static constexpr int GUEST_ENAMETOOLONG = 63;
 static constexpr int GUEST_ENOTDIR = 20;
 static constexpr int GUEST_ENOTEMPTY = 66;
+static constexpr int GUEST_EROFS = 30;
 
 static int SceErrorFromErrno(int error) {
     return static_cast<int>(0x80020000u | static_cast<unsigned>(error > 0 && error <= 34 ? error : error == GUEST_ENOTEMPTY ? error : GUEST_EIO));
@@ -195,6 +196,7 @@ int APS5_VABI chmod_nid_postfix(const char* path, int mode) {
         APS5_INVALID_ARG_EX;
     }
     auto native = ResolvePath_nid_no_patch(path);
+    if (IsReadOnlyGamePath(native, "chmod", path)) { errno = 30; return -1; }
     if (NativeChmod(native, mode) != 0) {
         throw std::runtime_error(std::string(__func__) + ": chmod failed for " + native.string() + ", errno=" + std::to_string(errno));
     }
@@ -472,9 +474,11 @@ int64_t APS5_VABI sceKernelPwrite(int d, const void* buf, size_t nbytes, int64_t
 int APS5_VABI sceKernelRename(const char* from, const char* to) {
     if (from == nullptr || to == nullptr) throw std::invalid_argument("sceKernelRename: path is null");
     const auto source = ResolvePath_nid_no_patch(from);
+    const auto destination = ResolvePath_nid_no_patch(to);
+    if (IsReadOnlyGamePath(source, "rename", from) || IsReadOnlyGamePath(destination, "rename to", to)) return SceErrorFromErrno(GUEST_EROFS);
     std::error_code error;
     if (!std::filesystem::exists(source, error)) return SceErrorFromErrno(GUEST_ENOENT);
-    std::filesystem::rename(source, ResolvePath_nid_no_patch(to), error);
+    std::filesystem::rename(source, destination, error);
     if (error) return SceErrorFromErrno(GUEST_EIO);
     return 0;
 }
@@ -482,6 +486,7 @@ int APS5_VABI sceKernelRename(const char* from, const char* to) {
 int APS5_VABI sceKernelRmdir(const char* path) {
     if (path == nullptr) throw std::invalid_argument("sceKernelRmdir: path is null");
     const auto native = ResolvePath_nid_no_patch(path);
+    if (IsReadOnlyGamePath(native, "rmdir", path)) return SceErrorFromErrno(GUEST_EROFS);
     std::error_code error;
     if (!std::filesystem::is_directory(native, error)) return SceErrorFromErrno(std::filesystem::exists(native, error) ? GUEST_ENOTDIR : GUEST_ENOENT);
     if (!std::filesystem::is_empty(native, error)) return SceErrorFromErrno(GUEST_ENOTEMPTY);
@@ -505,6 +510,7 @@ int APS5_VABI sceKernelTruncate_nid_postfix(const char* path, std::int64_t lengt
     if (path == nullptr) throw std::invalid_argument("sceKernelTruncate: path is null");
     if (length < 0) return SceErrorFromErrno(GUEST_EINVAL);
     const auto native = ResolvePath_nid_no_patch(path);
+    if (IsReadOnlyGamePath(native, "truncate", path)) return SceErrorFromErrno(GUEST_EROFS);
     std::error_code error;
     if (!std::filesystem::exists(native, error)) return SceErrorFromErrno(GUEST_ENOENT);
     std::filesystem::resize_file(native, static_cast<std::uintmax_t>(length), error);
@@ -515,6 +521,7 @@ int APS5_VABI sceKernelTruncate_nid_postfix(const char* path, std::int64_t lengt
 int APS5_VABI sceKernelUtimes_nid_postfix(const char* path, const KernelTimeval* times) {
     if (path == nullptr) throw std::invalid_argument("sceKernelUtimes: path is null");
     const auto native = ResolvePath_nid_no_patch(path);
+    if (IsReadOnlyGamePath(native, "utimes", path)) return SceErrorFromErrno(GUEST_EROFS);
     if (NativeUtimes(native, times) != 0) return SceErrorFromErrno(errno);
     return 0;
 }

@@ -25,3 +25,14 @@ in `loader/AdvancedPage.cs` reads `libs\libSceVideoOut.prx` (the copy the game l
 `loader\build.cmd [output folder]` builds `RyGTS.exe` with the .NET Framework 4 `csc`, which only
 accepts **C# 5**: no local functions, `out var`, tuples or string interpolation. Add new `.cs`
 files to the list in `build.cmd`.
+
+## Launcher version
+
+The launcher is versioned on its own: `LauncherVersion.Value` in `loader/Version.cs`, with a
+matching section in `loader/CHANGELOG.md`.
+
+- **Bump only the patch number:** 0.1.0, 0.1.1, 0.1.2, and so on. Launcher changes count as minor
+  updates, new features and new looks included. Do not raise the minor or major number unless the
+  maintainer says so.
+- Change `Version.cs` and the changelog's newest `## x.y.z - date` heading together:
+  `ci/tests/test_launcher_version.py` fails when they disagree.

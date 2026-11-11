@@ -6,7 +6,7 @@ The version lives in `loader/Version.cs`. To release a change, bump
 `LauncherVersion.Value` there and add a section here with the same number;
 CI fails when the two disagree.
 
-## 0.2.0 - 2026-11-12
+## 0.1.1 - 2026-11-12
 
 * New launcher look, ported from ryGT7's launcher: a full-window home view with the
   background pictures (slowly drifting, and fading between `launcherackground*.png`
@@ -23,6 +23,9 @@ CI fails when the two disagree.
 * When the game's config has entries nothing reads any more (so far `GPU.quality_preset`,
   replaced by System memory), the launcher asks on opening whether to remove them, with
   "Don't show again" (`prompt_obsolete` in `RyGT.ini`).
+* Set up no longer links the game's files into `app0` (Explorer counted the links as a second
+  copy of the game): the game reads them from the game and update folders. Links left by earlier
+  versions are removed; copies are kept. The RyGTS folder can be on any drive.
 
 ## 0.1.0 - 2026-11-11
 

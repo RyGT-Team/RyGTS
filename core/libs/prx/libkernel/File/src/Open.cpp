@@ -145,6 +145,10 @@ extern "C" {
 int APS5_VABI sceKernelOpen(const char* path, int flags, std::uint16_t mode) {
     APS5_LOG_TRACE("path=%s flags=0x%X nativeFlags=0x%X mode=0%o", path, flags, MapFlags(flags), mode);
     auto native = ResolvePath_nid_no_patch(path);
+    if (((flags & SCE_KERNEL_O_ACCMODE) != SCE_KERNEL_O_RDONLY || (flags & SCE_KERNEL_O_TRUNC) != 0) &&
+        IsReadOnlyGamePath(native, "write open", path)) {
+        return SceErrorFromErrno(30); // EROFS
+    }
     int nativeFlags = MapFlags(flags);
 #ifdef _WIN32
     if (File::HddStreamingEnabled() && File::IsStreamingGamePath(path) &&
@@ -158,7 +162,12 @@ int APS5_VABI sceKernelOpen(const char* path, int flags, std::uint16_t mode) {
 #ifdef _WIN32
     if (fd < 0 && errno != ENOENT) {
         std::error_code error;
-        if (std::filesystem::is_directory(native, error)) fd = File::OpenDirectoryDescriptor(native);
+        if (std::filesystem::is_directory(native, error)) {
+            std::vector<std::pair<std::filesystem::path, bool>> layered;
+            fd = ListLayeredDirectory_nid_no_patch(path, &layered)
+                ? File::OpenDirectoryDescriptor(native, std::move(layered))
+                : File::OpenDirectoryDescriptor(native);
+        }
     }
 #endif
     if (fd < 0) {
@@ -254,6 +263,9 @@ int APS5_VABI sceKernelUnlink(const char* path) {
         throw std::invalid_argument(std::string(__func__) + ": path is null");
     }
     auto native = ResolvePath_nid_no_patch(path);
+    if (IsReadOnlyGamePath(native, "unlink", path)) {
+        return SceErrorFromErrno(30); // EROFS
+    }
     if (NativeUnlink(native) != 0) {
         return SceErrorFromErrno(errno);
     }

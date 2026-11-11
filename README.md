@@ -47,7 +47,7 @@ contains the runtime libraries, the renderer, the converter, a launcher and the 
 It contains **no game files**: you need your own decrypted dump of GT Sport CUSA03220 with update
 1.69, and the system modules and fonts from your own PS4 firmware.
 
-Unzip it on the same drive as your dump and run `RyGTS.exe`: pick your game, update, firmware
+Unzip it anywhere and run `RyGTS.exe`: pick your game, update, firmware
 module and font folders, press **Set up**, then **Play**. The loader's source is in
 [loader](loader). Manual setup steps are in [docs/gt-sport/README.md](docs/gt-sport/README.md).
 
