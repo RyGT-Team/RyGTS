@@ -105,9 +105,36 @@ int main() {
         GuestArenaReset_nid_postfix(fixed, 2 * Page);
         GuestArenaRelease_nid_postfix(fixed, 2 * Page);
         CloseHandle(section);
+
+        // PERF-GTS-264: a large shared mapping is made of bounded views, so a partial unmap only
+        // splits the view it falls in; aliases still span the views of one section.
+        constexpr std::size_t View = 0x200000;
+        constexpr std::size_t LargeBytes = 3 * View + 2 * Page;
+        auto* big = static_cast<std::uint8_t*>(GuestArenaAllocate_nid_postfix(LargeBytes, 0x10000));
+        HANDLE bigSection = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_EXECUTE_READWRITE, 0, LargeBytes, nullptr);
+        Require(bigSection != nullptr, "could not create large guest backing");
+        GuestArenaMap_nid_postfix(big, LargeBytes, bigSection, 0, PAGE_READWRITE);
+        Require(Query(big + View).AllocationBase == big + View && Query(big + 3 * View).AllocationBase == big + 3 * View,
+                "a large shared mapping was not split into bounded views");
+        for (std::size_t at = 0; at < LargeBytes; at += Page) big[at] = static_cast<std::uint8_t>(at / Page + 1);
+        auto* across = static_cast<std::uint8_t*>(GuestArenaMapAlias_nid_postfix(reinterpret_cast<std::uintptr_t>(big + View - Page), 2 * Page));
+        Require(across != nullptr && across[0] == big[View - Page] && across[Page] == big[View],
+                "an alias across two shared views did not share the backing");
+        GuestArenaUnmapAlias_nid_postfix(across);
+        GuestArenaReset_nid_postfix(big + View + 4 * Page, Page);
+        for (std::size_t at = 0; at < LargeBytes; at += Page) {
+            if (at == View + 4 * Page) continue;
+            Require(big[at] == static_cast<std::uint8_t>(at / Page + 1), "partial unmap of a bounded view damaged shared memory");
+        }
+        Require(Query(big).AllocationBase == big && Query(big + 2 * View).AllocationBase == big + 2 * View,
+                "partial unmap remapped views outside the one it fell in");
+        GuestArenaReset_nid_postfix(big, LargeBytes);
+        GuestArenaRelease_nid_postfix(big, LargeBytes);
+        CloseHandle(bigSection);
+
         VirtualFree(driverBase, 0, MEM_RELEASE);
         VirtualFree(largeHost, 0, MEM_RELEASE);
-        std::puts("PASS: partitioned arena, host collisions, reuse, fixed mappings, partial unmap, shared aliases");
+        std::puts("PASS: partitioned arena, host collisions, reuse, fixed mappings, partial unmap, shared aliases, bounded shared views");
         return 0;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "FAIL: %s (Windows error %lu)\n", error.what(), GetLastError());
