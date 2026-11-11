@@ -87,6 +87,17 @@ overriding SHA must match it. For manual builds set `RENDERER_SHA` to the same
 full commit for both flavors and packaging. Without it, renderer preparation
 resolves the branch itself.
 
+## Code signing
+
+CI Authenticode-signs the launcher with a self-signed certificate
+(`CN=RyGT-Team, O=RyGT-Team`) before checksums and packaging, via
+`ci/sign-windows.ps1`. Set repository secrets `CODESIGN_PFX_BASE64` (base64 PFX) and
+`CODESIGN_PFX_PASSWORD` to use one stable certificate for every build; without
+them each run signs with a throwaway certificate. The signature is not trusted
+by Windows unless the certificate is installed as trusted, so SmartScreen and
+"Unknown publisher" warnings can still appear. Local builds sign only when
+`RYGT_CODESIGN=1`.
+
 ## Workflow maintenance and credentials
 
 The reviewed workflow and control-script sources are retained under
