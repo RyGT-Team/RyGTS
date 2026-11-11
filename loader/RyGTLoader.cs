@@ -1639,6 +1639,7 @@ namespace RyGT
         public string StdoutLevel = "Warning";
         public bool HddStreaming = false;
         public bool ShowAdvanced = true; // FEAT-GTS-438: the Advanced tab and its quick access entry
+        public bool PromptObsolete = true; // FEAT-GTS-469: offer to remove obsolete config entries
         public List<EnvVar> Env = new List<EnvVar>(); // FEAT-GTS-433
         readonly string path;
 
@@ -1664,12 +1665,13 @@ namespace RyGT
                 else if (key == "stdout_level") StdoutLevel = LogFiles.Levels[LogFiles.LevelIndex(value)];
                 else if (key == "hdd_streaming") HddStreaming = value == "1" || value.Equals("true", StringComparison.OrdinalIgnoreCase);
                 else if (key == "show_advanced") ShowAdvanced = !(value == "0" || value.Equals("false", StringComparison.OrdinalIgnoreCase));
+                else if (key == "prompt_obsolete") PromptObsolete = !(value == "0" || value.Equals("false", StringComparison.OrdinalIgnoreCase));
             }
         }
 
         public void Save()
         {
-            var lines = new List<string> { "game=" + Game, "update=" + Update, "modules=" + Modules, "fonts=" + Fonts, "stdout_level=" + StdoutLevel, "hdd_streaming=" + (HddStreaming ? "1" : "0"), "show_advanced=" + (ShowAdvanced ? "1" : "0") };
+            var lines = new List<string> { "game=" + Game, "update=" + Update, "modules=" + Modules, "fonts=" + Fonts, "stdout_level=" + StdoutLevel, "hdd_streaming=" + (HddStreaming ? "1" : "0"), "show_advanced=" + (ShowAdvanced ? "1" : "0"), "prompt_obsolete=" + (PromptObsolete ? "1" : "0") };
             foreach (var entry in Env) lines.Add("env=" + CustomEnvironment.Format(entry));
             File.WriteAllLines(path, lines);
         }
@@ -2518,7 +2520,11 @@ namespace RyGT
             log.BackColor = Dark.Field;
             log.ForeColor = Color.FromArgb(180, 186, 196);
             HandleCreated += delegate { Dark.TitleBar(this); };
-            Shown += delegate { ActiveControl = play.Enabled ? (Control)play : gear; };
+            Shown += delegate
+            {
+                ActiveControl = play.Enabled ? (Control)play : gear;
+                BeginInvoke((MethodInvoker)PromptObsoleteSettings); // once the window is up
+            };
             RefreshState();
         }
 
@@ -3215,16 +3221,16 @@ namespace RyGT
             panel.Controls.Add(row);
         }
 
-        // Renderer (GPU.native_renderer): the old renderer (shadGT's, with the direct memory
-        // renderer; the default) or the native renderer (experimental: GT Sport's command buffers
-        // recorded straight into Vulkan, faster in races; RYGT_NATIVE=1 or =0 overrides the choice).
+        // Renderer (GPU.native_renderer): the native renderer (the default; GT Sport's command
+        // buffers recorded straight into Vulkan, faster in races) or the old renderer (shadGT's,
+        // with the direct memory renderer). RYGT_NATIVE=1 or =0 overrides the choice.
         void AddRendererSetting(TableLayoutPanel panel)
         {
             var row = new FlowLayoutPanel { AutoSize = true, BackColor = Color.Transparent, Margin = new Padding(0, 2, 0, 4), WrapContents = false };
             var label = new Label { Text = "Renderer", AutoSize = false, Width = 110, Height = 20, BackColor = Color.Transparent, Margin = new Padding(0, 6, 8, 0) };
             var renderer = new DarkComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 230, FlatStyle = FlatStyle.Flat };
-            renderer.Items.AddRange(new object[] { "Old renderer (default)", "Native renderer (experimental)" });
-            renderer.SelectedIndex = ReadSetting("GPU", "native_renderer", false) ? 1 : 0;
+            renderer.Items.AddRange(new object[] { "Old renderer", "Native renderer (default)" });
+            renderer.SelectedIndex = ReadSetting("GPU", "native_renderer", true) ? 1 : 0;
             rendererCombo = renderer;
             renderer.SelectedIndexChanged += delegate
             {
@@ -3234,6 +3240,43 @@ namespace RyGT
             row.Controls.Add(label);
             row.Controls.Add(renderer);
             panel.Controls.Add(row);
+        }
+
+        // FEAT-GTS-469: like RPCS3's "Remove obsolete settings?", offer to drop config entries nothing
+        // reads any more (ObsoleteSettings.cs). "Don't show again" is kept in RyGT.ini (prompt_obsolete).
+        void PromptObsoleteSettings()
+        {
+            if (!settings.PromptObsolete) return;
+            Dictionary<string, object> config;
+            try { config = LoadConfig(); } catch { return; } // an unreadable config is reported where it is used
+            var found = ObsoleteSettings.Find(config);
+            if (found.Count == 0) return;
+            using (var dialog = new ObsoleteSettingsDialog(found))
+            {
+                var answer = dialog.ShowDialog(this);
+                if (dialog.DontShowAgain)
+                {
+                    settings.PromptObsolete = false;
+                    try { settings.Save(); } catch { }
+                }
+                if (answer != DialogResult.Yes) return;
+            }
+            try
+            {
+                ObsoleteSettings.Remove(config);
+                File.WriteAllText(ConfigPath, new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(config),
+                                  new UTF8Encoding(false));
+            }
+            catch (Exception e) { MessageBox.Show(this, "Could not remove the obsolete settings: " + e.Message); }
+        }
+
+        // The native renderer is the default, but the renderer itself still falls back to the old one
+        // when GPU.native_renderer is not set, so write the launcher's default before the game starts.
+        // A choice already saved (either renderer) is kept.
+        void ApplyNativeRendererDefault()
+        {
+            bool unset = ReadSetting("GPU", "native_renderer", true) && !ReadSetting("GPU", "native_renderer", false);
+            if (unset) WriteSetting("GPU", "native_renderer", true);
         }
 
         void AddExperimentalRenderScale(TableLayoutPanel panel)
@@ -4017,7 +4060,7 @@ namespace RyGT
         void Play()
         {
             if (!File.Exists(Exe)) { MessageBox.Show(this, "Press Set up first."); return; }
-            try { ApplyExperimentalRenderScale(); ResolveVulkanDevice(); }
+            try { ApplyNativeRendererDefault(); ApplyExperimentalRenderScale(); ResolveVulkanDevice(); }
             catch (Exception e) { MessageBox.Show(this, e.Message); return; }
             // Without its data index GT Sport closes right after the splash screen.
             string dataProblem = ReadProblem(Path.Combine(root, "app0", "gt.idx"), -1);
@@ -4333,15 +4376,20 @@ namespace RyGT
                 }
                 return 0;
             }
-            if (args.Length == 2 && (args[0] == "--snapshot-ports" || args[0] == "--snapshot-bindings" || args[0] == "--snapshot-wheel"))
+            if (args.Length == 2 && (args[0] == "--snapshot-ports" || args[0] == "--snapshot-bindings" || args[0] == "--snapshot-wheel" ||
+                                     args[0] == "--snapshot-obsolete"))
             {
-                // The Controller ports, Button bindings or Steering wheel window as a PNG (nothing is saved).
+                // The Controller ports, Button bindings, Steering wheel or obsolete settings window as a PNG
+                // (nothing is saved).
                 string root = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
                 using (Form form = args[0] == "--snapshot-ports"
                            ? (Form)new PortsForm("", null, (ports, names) => { })
                            : args[0] == "--snapshot-wheel"
                                ? (Form)new WheelForm(root)
-                               : new ControlsForm(root, 1, player => { }))
+                               : args[0] == "--snapshot-obsolete"
+                                   ? (Form)new ObsoleteSettingsDialog(ObsoleteSettings.Find(new Dictionary<string, object>
+                                         { { "GPU", new Dictionary<string, object> { { "quality_preset", 2 } } } }))
+                                   : new ControlsForm(root, 1, player => { }))
                 {
                     form.StartPosition = FormStartPosition.Manual;
                     form.Location = new Point(-4000, -4000);
