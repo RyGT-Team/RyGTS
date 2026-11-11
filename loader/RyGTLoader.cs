@@ -15,7 +15,7 @@ using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 
-[assembly: System.Reflection.AssemblyCompany("RyGTS")]
+[assembly: System.Reflection.AssemblyCompany("RyGT-Team")]
 [assembly: System.Reflection.AssemblyProduct("RyGTS")]
 [assembly: System.Reflection.AssemblyTitle("RyGTS Launcher")]
 [assembly: System.Reflection.AssemblyDescription("Gran Turismo Sport launcher for Windows")]

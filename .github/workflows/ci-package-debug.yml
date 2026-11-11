@@ -16,6 +16,10 @@ on:
     secrets:
       GITLAB_PACKAGE_TOKEN:
         required: false
+      CODESIGN_PFX_BASE64:
+        required: false
+      CODESIGN_PFX_PASSWORD:
+        required: false
   workflow_dispatch:
 permissions:
   contents: read
@@ -75,6 +79,10 @@ jobs:
           if ($LASTEXITCODE -or (git rev-parse HEAD) -cne $env:SOURCE_SHA) { throw 'Source mismatch' }
       - name: Build Diagnostics launcher and renderer
         shell: pwsh
+        env:
+          RYGT_CODESIGN: '1'
+          CODESIGN_PFX_BASE64: ${{ secrets.CODESIGN_PFX_BASE64 }}
+          CODESIGN_PFX_PASSWORD: ${{ secrets.CODESIGN_PFX_PASSWORD }}
         run: |
           $ErrorActionPreference = 'Stop'
           Set-Location $env:RYGT_CI_ROOT

@@ -12,6 +12,7 @@ New-Item -ItemType Directory -Force $out | Out-Null
 if ($Target -eq 'Launcher') {
     Invoke-Checked 'cmd.exe' @('/d','/c', 'loader\build.cmd', $out, $Flavor)
     if (!(Test-Path "$out/RyGTS.exe")) { throw 'Launcher output missing' }
+    if ($env:RYGT_CODESIGN -eq '1') { & (Join-Path $PSScriptRoot 'sign-windows.ps1') -Path "$out/RyGTS.exe" }
 } else {
     if (!$env:LLVM_ROOT) { throw 'Set LLVM_ROOT to the LLVM 23.1.3 distribution (see docs/dev/CI.md)' }
     $llvm = (Resolve-Path $env:LLVM_ROOT).Path
