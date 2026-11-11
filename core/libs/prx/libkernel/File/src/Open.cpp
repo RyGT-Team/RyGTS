@@ -158,7 +158,12 @@ int APS5_VABI sceKernelOpen(const char* path, int flags, std::uint16_t mode) {
 #ifdef _WIN32
     if (fd < 0 && errno != ENOENT) {
         std::error_code error;
-        if (std::filesystem::is_directory(native, error)) fd = File::OpenDirectoryDescriptor(native);
+        if (std::filesystem::is_directory(native, error)) {
+            std::vector<std::pair<std::filesystem::path, bool>> layered;
+            fd = ListLayeredDirectory_nid_no_patch(path, &layered)
+                ? File::OpenDirectoryDescriptor(native, std::move(layered))
+                : File::OpenDirectoryDescriptor(native);
+        }
     }
 #endif
     if (fd < 0) {

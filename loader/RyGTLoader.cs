@@ -25,13 +25,36 @@ namespace RyGT
 {
     static class Native
     {
-        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-        public static extern bool CreateHardLink(string newFile, string existingFile, IntPtr security);
+        [StructLayout(LayoutKind.Sequential)]
+        struct ByHandleFileInformation
+        {
+            public uint Attributes;
+            public System.Runtime.InteropServices.ComTypes.FILETIME Created, Accessed, Written;
+            public uint VolumeSerialNumber, SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
+        }
 
-        // Returns a one-byte BOOLEAN, not a BOOL.
-        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-        [return: MarshalAs(UnmanagedType.I1)]
-        public static extern bool CreateSymbolicLink(string link, string target, int flags);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool GetFileInformationByHandle(Microsoft.Win32.SafeHandles.SafeFileHandle file, out ByHandleFileInformation information);
+
+        public struct FileIdentity { public uint Volume; public ulong Index; }
+
+        /// The volume and file number of a file (following a link), which hard links of it share.
+        public static bool Identify(string path, out FileIdentity identity)
+        {
+            identity = new FileIdentity();
+            try
+            {
+                using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                {
+                    ByHandleFileInformation information;
+                    if (!GetFileInformationByHandle(stream.SafeFileHandle, out information)) return false;
+                    identity.Volume = information.VolumeSerialNumber;
+                    identity.Index = ((ulong)information.IndexHigh << 32) | information.IndexLow;
+                    return true;
+                }
+            }
+            catch { return false; }
+        }
 
         [DllImport("dwmapi.dll")]
         public static extern int DwmSetWindowAttribute(IntPtr window, int attribute, ref int value, int size);
@@ -45,10 +68,7 @@ namespace RyGT
             out IntPtr device, out int featureLevel, out IntPtr immediateContext);
     }
 
-    /// Wine (Linux, Steam Proton): its kernel32 has wine_get_unix_file_name. Wine before 11 cannot
-    /// make Windows links (CreateSymbolicLink does nothing there and mklink /J fails), so under Wine
-    /// the game's files and folders are linked with Unix symbolic links, which Wine follows like the
-    /// files themselves (and reports as reparse points when they are folders).
+    /// Wine (Linux, Steam Proton): its kernel32 has wine_get_unix_file_name.
     static class Wine
     {
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
@@ -56,44 +76,6 @@ namespace RyGT
 
         [DllImport("kernel32.dll", CharSet = CharSet.Ansi, BestFitMapping = false)]
         static extern IntPtr GetProcAddress(IntPtr module, string name);
-
-        [DllImport("kernel32.dll", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Unicode, ExactSpelling = true)]
-        static extern IntPtr wine_get_unix_file_name(string dosPath);
-
-        [DllImport("kernel32.dll", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi, ExactSpelling = true,
-                   BestFitMapping = false)]
-        static extern IntPtr wine_get_dos_file_name(string unixPath);
-
-        [DllImport("kernel32.dll")]
-        static extern IntPtr GetProcessHeap();
-
-        [DllImport("kernel32.dll")]
-        static extern bool HeapFree(IntPtr heap, uint flags, IntPtr memory);
-
-        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-        struct StartupInfo
-        {
-            public int cb;
-            public string reserved, desktop, title;
-            public int x, y, width, height, columns, rows, fill, flags;
-            public short show, reserved2;
-            public IntPtr reserved3, input, output, error;
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        struct ProcessInformation
-        {
-            public IntPtr process, thread;
-            public int processId, threadId;
-        }
-
-        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-        static extern bool CreateProcess(string application, StringBuilder commandLine, IntPtr processAttributes,
-            IntPtr threadAttributes, bool inheritHandles, uint flags, IntPtr environment, string directory,
-            ref StartupInfo startup, out ProcessInformation information);
-
-        [DllImport("kernel32.dll")]
-        static extern bool CloseHandle(IntPtr handle);
 
         static readonly bool detected = DetectWine();
 
@@ -107,79 +89,6 @@ namespace RyGT
                 return kernel != IntPtr.Zero && GetProcAddress(kernel, "wine_get_unix_file_name") != IntPtr.Zero;
             }
             catch { return false; }
-        }
-
-        /// The Unix path of a Windows path (whose last part need not exist yet).
-        public static string UnixPath(string path)
-        {
-            IntPtr unix = wine_get_unix_file_name(Path.GetFullPath(path));
-            if (unix == IntPtr.Zero) throw new Exception("Wine has no Unix path for " + path + ".");
-            try
-            {
-                int length = 0;
-                while (Marshal.ReadByte(unix, length) != 0) length++;
-                var bytes = new byte[length];
-                Marshal.Copy(unix, bytes, 0, length);
-                return Encoding.UTF8.GetString(bytes);
-            }
-            finally { HeapFree(GetProcessHeap(), 0, unix); }
-        }
-
-        static string DosPath(string unixPath)
-        {
-            IntPtr dos = wine_get_dos_file_name(unixPath);
-            if (dos == IntPtr.Zero) throw new Exception("Wine has no Windows path for " + unixPath + ".");
-            try { return Marshal.PtrToStringUni(dos); }
-            finally { HeapFree(GetProcessHeap(), 0, dos); }
-        }
-
-        static string Quote(string unixPath)
-        {
-            return "'" + unixPath.Replace("'", "'\\''") + "'";
-        }
-
-        /// Makes each link (key) a Unix symbolic link to its target (value), replacing an earlier
-        /// symbolic link but never a real file or folder, with one /bin/sh script. Wine starts Unix
-        /// programs detached, so the script's last line writes a file to wait for.
-        public static void Link(IEnumerable<KeyValuePair<string, string>> links)
-        {
-            string name = "rygt-link-" + Guid.NewGuid().ToString("N");
-            string script = Path.Combine(Path.GetTempPath(), name + ".sh");
-            string done = Path.Combine(Path.GetTempPath(), name + ".done");
-            var text = new StringBuilder();
-            text.Append("#!/bin/sh\n# Written by RyGTS.exe: links the game's files under Wine.\n");
-            text.Append("PATH=/usr/local/bin:/usr/bin:/bin\n");
-            text.Append("link() { if [ -L \"$2\" ] || [ ! -e \"$2\" ]; then ln -sfn \"$1\" \"$2\"; fi; }\n");
-            foreach (var pair in links)
-            {
-                // The link's folder exists; its last part may not (Wine still gives the Unix path).
-                string folder = UnixPath(Path.GetDirectoryName(Path.GetFullPath(pair.Key)));
-                text.Append("link " + Quote(UnixPath(pair.Value)) + " " +
-                            Quote(folder.TrimEnd('/') + "/" + Path.GetFileName(pair.Key)) + "\n");
-            }
-            text.Append("echo done > " + Quote(UnixPath(done)) + "\n");
-            File.WriteAllText(script, text.ToString(), new UTF8Encoding(false));
-            try
-            {
-                var startup = new StartupInfo { cb = Marshal.SizeOf(typeof(StartupInfo)) };
-                ProcessInformation information;
-                var command = new StringBuilder("\"" + DosPath("/bin/sh") + "\" \"" + UnixPath(script) + "\"");
-                const uint CreateNoWindow = 0x08000000;
-                if (!CreateProcess(null, command, IntPtr.Zero, IntPtr.Zero, false, CreateNoWindow, IntPtr.Zero, null,
-                                   ref startup, out information))
-                    throw new Exception("Could not start /bin/sh to link the game's files (error " +
-                                        Marshal.GetLastWin32Error() + ").");
-                if (information.thread != IntPtr.Zero) CloseHandle(information.thread);
-                if (information.process != IntPtr.Zero) CloseHandle(information.process);
-                var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
-                while (!File.Exists(done) && DateTime.UtcNow < deadline) Thread.Sleep(50);
-                if (!File.Exists(done)) throw new Exception("Linking the game's files with /bin/sh did not finish.");
-            }
-            finally
-            {
-                try { File.Delete(script); } catch { }
-                try { File.Delete(done); } catch { }
-            }
         }
     }
 
@@ -3606,9 +3515,9 @@ namespace RyGT
             else File.Move(stagedExe, Exe);
             Log(Wine.Detected ? "Made GTSport.exe a Windows program." : "Gave GTSport.exe the Gran Turismo Sport icon and made it a Windows program.");
 
-            // 3. app0: the game's files, the update's over the base game's, linked rather than copied.
-            SetStatus("Linking the game files...");
-            LinkGameFiles(baseDir, updateDir);
+            // 3. The game's files stay where they are: /app0 is read from the update, then the base game.
+            SetStatus("Checking the game files...");
+            UseGameFoldersDirectly(baseDir, updateDir);
 
             // 4. Fonts.
             if (fontDir != null && font2Dir != null)
@@ -3864,9 +3773,20 @@ namespace RyGT
             }
         }
 
-        void LinkGameFiles(string baseDir, string updateDir)
+        // FEAT-GTS-470: the game reads /app0 straight from the update and base game folders (named in
+        // RyGT.ini; see core/libs/prx/libc/include/AppOverlay.hpp), so nothing is linked into app0 any
+        // more. Set up from earlier versions linked every game file there (hard links, which Explorer
+        // counts as a second copy of the game); those links are removed. Only links are: a file is
+        // removed only when it is the game's own file (the same file on disk, or a link to it), a
+        // folder only when it is a junction or link. Copies and anything else are left alone.
+        void UseGameFoldersDirectly(string baseDir, string updateDir)
         {
-            string app0 = Path.Combine(root, "app0");
+            RemoveGameLinks(Path.Combine(root, "app0"), baseDir, updateDir, Log);
+            Log("The game reads its files from " + (updateDir != null ? updateDir + " and " : "") + baseDir + ".");
+        }
+
+        internal static void RemoveGameLinks(string app0, string baseDir, string updateDir, Action<string> Log)
+        {
             var files = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var dirs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var source in new[] { baseDir, updateDir })
@@ -3888,52 +3808,62 @@ namespace RyGT
             if (!files.ContainsKey("gt.idx"))
                 throw new Exception("Neither game folder has gt.idx. Pick the GT Sport folder (CUSA03220) and its update, " +
                                     "the folders with gt.idx and the gt*.vol files.");
-            int linked = 0, hard = 0, symbolic = 0;
-            var unixLinks = new Dictionary<string, string>(); // under Wine: link -> target
+            int removed = 0, kept = 0;
             foreach (var pair in files)
             {
-                string target = Path.Combine(app0, pair.Key);
-                if (File.Exists(target)) File.Delete(target);
-                if (Native.CreateHardLink(target, pair.Value, IntPtr.Zero)) { linked++; hard++; continue; }
-                if (Wine.Detected) { unixLinks[target] = pair.Value; continue; }
-                if (Native.CreateSymbolicLink(target, pair.Value, 2)) { linked++; symbolic++; continue; } // needs Developer Mode
-                throw new Exception("Could not link " + pair.Value + ". Put the RyGTS folder on the same drive as the game, " +
-                                    "or turn on Developer Mode in Windows settings.");
-            }
-            if (Wine.Detected)
-            {
-                foreach (var pair in dirs) unixLinks[Path.Combine(app0, pair.Key)] = pair.Value;
-                Wine.Link(unixLinks);
-                foreach (var pair in unixLinks)
+                string old = Path.Combine(app0, pair.Key);
+                if (!File.Exists(old)) continue;
+                try
                 {
-                    if (dirs.ContainsKey(Path.GetFileName(pair.Key)) ? !Directory.Exists(pair.Key) : !File.Exists(pair.Key))
-                        throw new Exception("Could not link " + pair.Value + " into app0.");
-                    if (!dirs.ContainsKey(Path.GetFileName(pair.Key))) linked++;
+                    if ((File.GetAttributes(old) & FileAttributes.ReparsePoint) != 0 || SameFile(old, pair.Value))
+                    {
+                        File.Delete(old);
+                        removed++;
+                    }
+                    else kept++;
                 }
-                Log("Linked " + linked + " game files and " + dirs.Count + " folders into app0.");
-                return;
+                catch (Exception e) { kept++; Log("Note: could not remove the old link app0\\" + pair.Key + " (" + e.Message.TrimEnd('.') + ")."); }
             }
             foreach (var pair in dirs)
             {
-                string target = Path.Combine(app0, pair.Key);
-                if (Directory.Exists(target)) Directory.Delete(target, false);
-                var info = new ProcessStartInfo("cmd.exe", "/c mklink /J \"" + target + "\" \"" + pair.Value + "\"")
-                { UseShellExecute = false, CreateNoWindow = true };
-                using (var process = Process.Start(info)) process.WaitForExit();
-                if (!Directory.Exists(target)) throw new Exception("Could not link the folder " + pair.Value + ".");
+                string old = Path.Combine(app0, pair.Key);
+                if (!Directory.Exists(old)) continue;
+                try
+                {
+                    // Deleting a junction or folder link removes the link, never what it points to.
+                    if ((File.GetAttributes(old) & FileAttributes.ReparsePoint) != 0) { Directory.Delete(old, false); removed++; }
+                    else kept++;
+                }
+                catch (Exception e) { kept++; Log("Note: could not remove the old link app0\\" + pair.Key + " (" + e.Message.TrimEnd('.') + ")."); }
             }
-            foreach (var pair in files)
-            {
-                string problem = ReadProblem(Path.Combine(app0, pair.Key), new FileInfo(pair.Value).Length);
-                if (problem != null)
-                    throw new Exception("app0\\" + pair.Key + " " + problem + " after linking it to " + pair.Value +
-                                        ". Put the RyGTS folder on the same drive as the game and press Set up again.");
-            }
-            Log("Linked " + linked + " game files (" + hard + " hard links, " + symbolic + " symbolic links) and " +
-                dirs.Count + " folders into app0.");
+            if (removed > 0) Log("Removed " + removed + " links to the game's files from app0; the game reads them from their own folders now.");
+            if (kept > 0) Log("Note: app0 still has " + kept + " of the game's files or folders that are not links to them; they are used before the game folders.");
         }
 
-        /// Why a linked game file can't be used (missing, unreadable or a different size), or null.
+        /// Whether two paths are the same file on disk (one a hard link of the other, or a link to it).
+        static bool SameFile(string a, string b)
+        {
+            Native.FileIdentity first, second;
+            return Native.Identify(a, out first) && Native.Identify(b, out second) &&
+                   first.Volume == second.Volume && first.Index == second.Index;
+        }
+
+        /// The first of the game's folders that has `name` at its top: RyGTS\app0 (what Set up made),
+        /// the update, then the base game, in the order the game looks (FEAT-GTS-470).
+        string GameFile(string name)
+        {
+            var folders = new List<string> { Path.Combine(root, "app0") };
+            if (settings.Update.Length > 0) folders.Add(settings.Update);
+            if (settings.Game.Length > 0) folders.Add(settings.Game);
+            foreach (var folder in folders)
+            {
+                string path = Path.Combine(folder, name);
+                if (File.Exists(path)) return path;
+            }
+            return null;
+        }
+
+        /// Why a game file can't be used (missing, unreadable or a different size), or null.
         /// Opening it follows a symbolic link, unlike FileInfo.
         static string ReadProblem(string path, long expectedLength)
         {
@@ -4063,12 +3993,12 @@ namespace RyGT
             try { ApplyNativeRendererDefault(); ApplyExperimentalRenderScale(); ResolveVulkanDevice(); }
             catch (Exception e) { MessageBox.Show(this, e.Message); return; }
             // Without its data index GT Sport closes right after the splash screen.
-            string dataProblem = ReadProblem(Path.Combine(root, "app0", "gt.idx"), -1);
+            string dataIndex = GameFile("gt.idx");
+            string dataProblem = dataIndex == null ? "is missing" : ReadProblem(dataIndex, -1);
             if (dataProblem != null)
             {
-                MessageBox.Show(this, "GT Sport's data index app0\\gt.idx " + dataProblem + ", so the game can't start.\n\n" +
-                                "Press Set up again. If the RyGTS folder is on a different drive than the game, move it " +
-                                "to the game's drive first.");
+                MessageBox.Show(this, "GT Sport's data index gt.idx " + dataProblem + ", so the game can't start.\n\n" +
+                                "Check that the game and update folders on the Game page still exist, then press Set up again.");
                 return;
             }
             // The one-time steps below can take minutes (copying shaders, preparing them), so they run
