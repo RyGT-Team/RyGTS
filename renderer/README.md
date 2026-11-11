@@ -46,7 +46,9 @@ Patch 0039 is the shader-compile work (all-core compiles when many wait, faster 
 translation, store dump). Patch 0040 adds the native renderer (experimental): GT Sport's command
 buffers are recorded straight into Vulkan by its own renderer instead of shadGT's (about 33-39 fps
 against 29 in the Tokyo rain benchmark). The launcher's "Renderer" dropdown picks it
-(`GPU.native_renderer`; `RYGT_NATIVE=1` or `=0` overrides); the old renderer stays the default.
+(`GPU.native_renderer`; `RYGT_NATIVE=1` or `=0` overrides). Since launcher 0.2.0 the native renderer
+is no longer experimental and is the launcher's default: it writes `native_renderer = true` when the
+setting is unset (the renderer's own fallback is still the old renderer).
 Known open problems: in Tokyo at night the cockpit's ambient light flickers between warm and dark
 frames, and rare frames are drawn from a wrong camera. Patch 0041 makes shadGT apply the VMA patch
 by itself at configure time. Patch 0042 lets the non-renderer host libraries link again (a no-op

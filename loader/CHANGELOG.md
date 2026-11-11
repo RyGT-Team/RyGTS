@@ -17,6 +17,12 @@ CI fails when the two disagree.
 * Settings are full-width rows with switches, drop-downs and sliders under spaced
   capital headings; buttons are outlined, and views change with a short fade.
 * Every setting is kept with the same keys and files; only where it is shown changed.
+* The native renderer is no longer experimental and is now the default renderer. Installs
+  that never picked a renderer switch to it on the next Play; a saved choice of the old
+  renderer is kept.
+* When the game's config has entries nothing reads any more (so far `GPU.quality_preset`,
+  replaced by System memory), the launcher asks on opening whether to remove them, with
+  "Don't show again" (`prompt_obsolete` in `RyGT.ini`).
 
 ## 0.1.0 - 2026-11-11
 
