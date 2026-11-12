@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][ValidateSet('Launcher','Renderer')][string]$Target, [ValidateSet('Release','Diagnostics')][string]$Flavor='Release')
+param([Parameter(Mandatory=$true)][ValidateSet('Launcher','Renderer','Runtime')][string]$Target, [ValidateSet('Release','Diagnostics')][string]$Flavor='Release')
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 Set-Location (Split-Path $PSScriptRoot -Parent)
@@ -13,6 +13,33 @@ if ($Target -eq 'Launcher') {
     Invoke-Checked 'cmd.exe' @('/d','/c', 'loader\build.cmd', $out, $Flavor)
     if (!(Test-Path "$out/RyGTS.exe")) { throw 'Launcher output missing' }
     if ($env:RYGT_CODESIGN -eq '1') { & (Join-Path $PSScriptRoot 'sign-windows.ps1') -Path "$out/RyGTS.exe" }
+} elseif ($Target -eq 'Runtime') {
+    # FEAT-GTS-260: the runtime libraries (libs/*.prx) and the MinGW runtime DLLs beside GTSport.exe,
+    # built with the pinned MSYS2 UCRT64 GCC and FFmpeg package in ci/runtime-toolchain.json. Only the
+    # renderer's libSceVideoOut.prx is left out: the Renderer target builds the real one.
+    $tools = if ($env:RYGT_RUNTIME_TOOLS) { $env:RYGT_RUNTIME_TOOLS } else { 'C:/ci-tools/runtime' }
+    $toolchain = & python ci/runtime_toolchain.py install $tools | Select-Object -Last 1
+    if ($LASTEXITCODE -or !$toolchain -or !(Test-Path "$toolchain/g++.exe")) { throw 'Pinned runtime toolchain unavailable' }
+    $ffmpeg = & python ci/runtime_toolchain.py ffmpeg $tools | Select-Object -Last 1
+    if ($LASTEXITCODE -or !$ffmpeg) { throw 'Pinned FFmpeg package unavailable' }
+    $env:PATH = "$toolchain;$env:PATH"
+    $compiler = & "$toolchain/g++.exe" --version | Select-Object -First 1
+    if ("$compiler" -notmatch '\b16\.2\.0\b') { throw "Unexpected runtime compiler: $compiler" }
+    $submodules = @('LibAtrac9','SDL2','SPIRV-Headers','Vulkan-Headers','ffmpeg-core','freetype','glslang','stb') | ForEach-Object { "3rdparty/$_" }
+    Invoke-Checked 'git' (@('submodule','update','--init','--depth','1','--') + $submodules)
+    $build = Join-Path (Get-Location) 'build/ci-runtime'
+    Invoke-Checked 'cmake' @('-S','.','-B',$build,'-G','Ninja','-DCMAKE_BUILD_TYPE=Release','-DBUILD_TESTING=OFF',
+        '-DRTY_BUILD_GUI=OFF','-DRTY_ENABLE_LTO=OFF',"-DCMAKE_C_COMPILER=$toolchain/gcc.exe",
+        "-DCMAKE_CXX_COMPILER=$toolchain/g++.exe","-DFFMPEG_PREBUILT_DIR=$ffmpeg")
+    Invoke-Checked 'cmake' @('--build',$build,'--target','libs')
+    $libraries = @(Get-ChildItem "$build/core/libs/libs" -Filter *.prx -File | Where-Object Name -ne 'libSceVideoOut.prx')
+    foreach ($required in 'libc.prx','libkernel.prx','libScePad.prx') {
+        if (!($libraries | Where-Object Name -eq $required)) { throw "Runtime build is missing $required" }
+    }
+    $libraries | Copy-Item -Destination $out
+    foreach ($dll in 'libgcc_s_seh-1.dll','libstdc++-6.dll','libwinpthread-1.dll') { Copy-Item "$toolchain/$dll" $out }
+    Copy-Item ci/runtime-toolchain.json "$out/RUNTIME-TOOLCHAIN.json"
+    Write-Host "Runtime: $($libraries.Count) libraries built with $compiler"
 } else {
     if (!$env:LLVM_ROOT) { throw 'Set LLVM_ROOT to the LLVM 23.1.3 distribution (see docs/dev/CI.md)' }
     $llvm = (Resolve-Path $env:LLVM_ROOT).Path
@@ -107,7 +134,7 @@ int rygt_ndebug_probe(void) { return 0; }
     Copy-Item "$source/CI-SOURCE.txt" $out
     Invoke-Checked 'git' @('-C',$source,'submodule','status','--recursive')
 }
-if ($Flavor -eq 'Diagnostics') {
+if ($Flavor -eq 'Diagnostics' -and $Target -ne 'Runtime') {
     if (!$env:LLVM_ROOT) { throw 'LLVM_ROOT required to verify diagnostics symbols' }
     $name = if ($Target -eq 'Launcher') { 'RyGTS' } else { 'libSceVideoOut' }
     $extension = if ($Target -eq 'Launcher') { 'exe' } else { 'prx' }

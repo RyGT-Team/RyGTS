@@ -5,6 +5,7 @@ log and the existing documentation.
 
 ## Unreleased
 
+* FEAT-GTS-260: CI packages now build the runtime libraries (`libs/*.prx`) from the same revision as the launcher and renderer, with a pinned MSYS2 UCRT64 GCC 16.2.0 (`ci/runtime-toolchain.json`), instead of taking them from the October 25 archive. Only libraries this source does not build stay from the archive, and packaging fails if any packaged module imports a function another one does not export.
 * FEAT-GTS-259: The game reads `/app0` straight from the game and update folders (`game=` and `update=` in `RyGT.ini`) instead of from links in `RyGTS\app0`, which Explorer counted as a second copy of the game. `RyGTS\app0` now only holds the converted `sce_module`; the update's files win over the base game's, folder by folder and file by file. The game can no longer change, delete or rename the player's game files (EROFS, as on a PS4). The RyGTS folder no longer has to be on the game's drive, and Developer Mode is never needed.
 * Enable shader precompilation and persistent pipeline caching in packaged defaults, including the 16 GB preset inherited from the runtime bundle.
 

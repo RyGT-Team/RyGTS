@@ -40,14 +40,56 @@ def pe():
     return bytes(data)
 
 
+def linked_pe(exports=(), imports=None):
+    """A PE32+ image with one section holding an export table and an import table (FEAT-GTS-260)."""
+    imports = imports or {}
+    rva, raw = 0x1000, 0x200
+    body = bytearray(0x1000)
+    strings = {}
+
+    def put(text, at):
+        encoded = text.encode() + b'\0'
+        body[at:at + len(encoded)] = encoded
+        return at + len(encoded)
+
+    cursor = 0x800
+    for text in list(exports) + list(imports):  # plain names
+        strings[text] = cursor
+        cursor = put(text, cursor)
+    hints = {}
+    for text in {n for names in imports.values() for n in names}:  # 2-byte hint, then the name
+        hints[text] = cursor
+        cursor = put(text, cursor + 2)
+    # Export directory at 0x000: names table at 0x040.
+    struct.pack_into('<IIIIIIIIII', body, 0, 0, 0, 0, 0, 1, len(exports), len(exports), 0, rva + 0x40, 0)
+    for i, name in enumerate(exports):
+        struct.pack_into('<I', body, 0x40 + 4 * i, rva + strings[name])
+    # Import descriptors at 0x200, thunks from 0x400.
+    thunk = 0x400
+    for i, (dll, names) in enumerate(imports.items()):
+        struct.pack_into('<IIIII', body, 0x200 + 20 * i, rva + thunk, 0, 0, rva + strings[dll], rva + thunk)
+        for name in names:
+            struct.pack_into('<Q', body, thunk, rva + hints[name])
+            thunk += 8
+        thunk += 8
+    data = bytearray(pe()[:raw]) + body
+    struct.pack_into('<II', data, 152 + 112, rva if exports else 0, 0x100 if exports else 0)
+    struct.pack_into('<II', data, 152 + 112 + 8, rva + 0x200 if imports else 0, 0x100 if imports else 0)
+    struct.pack_into('<II', data, 152 + 112 + 48, 0, 0)
+    struct.pack_into('<IIII', data, 392 + 8, len(body), rva, len(body), raw)
+    return bytes(data)
+
+
 class PackageTests(unittest.TestCase):
     def fixture(self):
         base = Path('base.zip')
         with zipfile.ZipFile(base, 'w') as z:
             for name in ('converter/ryty.exe', 'tools/adcpatch/adcpatch.exe',
-                         'libs/libSceBluetoothHid.prx', 'amd_fidelityfx_vk.dll',
                          'amd_fidelityfx_vk-LICENSE.txt', 'launcher/background.png'):
                 z.writestr(pkg.BASE_FOLDER + '/' + name, b'fixture')
+            # Packaged modules are PE images; the archive's own libc is replaced by the rebuilt one.
+            for name in ('libs/libSceBluetoothHid.prx', 'amd_fidelityfx_vk.dll', 'libs/libc.prx', 'libstdc++-6.dll'):
+                z.writestr(pkg.BASE_FOLDER + '/' + name, pe())
             z.writestr(pkg.BASE_FOLDER + '/user/custom_configs/CUSA03220.json',
                        json.dumps({'GPU': {'precompile_shaders': False},
                                    'Vulkan': {'pipeline_cache_enabled': False}}))
@@ -72,6 +114,17 @@ class PackageTests(unittest.TestCase):
                     if target == 'renderer':
                         (folder / 'frame-capture-layouts.json').write_text(json.dumps({pkg.sha(folder / binary).upper(): {}}))
                 self.rehash(folder)
+        runtime = Path('artifacts/runtime')
+        runtime.mkdir(parents=True)
+        (runtime / 'libc.prx').write_bytes(linked_pe(exports=('__cxa_throw', 'malloc')))
+        (runtime / 'libkernel.prx').write_bytes(linked_pe(exports=('sceKernelOpen',), imports={'libc.prx': ['malloc']}))
+        (runtime / 'libScePad.prx').write_bytes(linked_pe(imports={'libc.prx': ['__cxa_throw'], 'KERNEL32.dll': ['Sleep']}))
+        for dll in pkg.RUNTIME_DLLS:
+            (runtime / dll).write_bytes(pe())
+        (runtime / 'RUNTIME-TOOLCHAIN.json').write_text(json.dumps({'packages': [], 'ffmpeg': {}}))
+        (runtime / 'RYGT-COMMIT.txt').write_text(SHA)
+        (runtime / 'BUILD-PROFILE.json').write_text(json.dumps(dict(schema=1, flavor='Release', commit=SHA, optimized=True, full_symbols=False)))
+        self.rehash(runtime)
         return base
 
     def rehash(self, folder):
@@ -102,7 +155,12 @@ class PackageTests(unittest.TestCase):
                     info = json.loads(z.read(prefix + 'BUILD_INFO.txt'))
                     self.assertEqual(info['commit'], SHA)
                     self.assertEqual(info['channel'], variant['channel'])
-                    self.assertEqual(info['rebuilt'], ['RyGTS.exe', 'libs/libSceVideoOut.prx'])
+                    self.assertEqual(info['rebuilt'], ['RyGTS.exe', 'libs/libSceVideoOut.prx', 'libs/libScePad.prx',
+                                                       'libs/libc.prx', 'libs/libkernel.prx'] + list(pkg.RUNTIME_DLLS))
+                    self.assertEqual(info['retained'], ['libs/libSceBluetoothHid.prx'])
+                    # The rebuilt libc and MinGW runtime replace the archive's copies.
+                    self.assertEqual(z.read(prefix + 'libs/libc.prx'), Path('artifacts/runtime/libc.prx').read_bytes())
+                    self.assertEqual(z.read(prefix + 'libstdc++-6.dll'), Path('artifacts/runtime/libstdc++-6.dll').read_bytes())
                     self.assertEqual(info['renderer_source'].splitlines(), [
                         'https://github.com/RyGT-Team/shadGT.git', RENDERER_SHA])
                     self.assertNotIn('runtime_overlay', info)
@@ -262,6 +320,43 @@ class PackageTests(unittest.TestCase):
                     z.writestr(entry, b'excluded')
                 with self.assertRaises(RuntimeError):
                     pkg.extract_runtime(Path('base.zip'), Path('stage'))
+
+    def test_unresolved_imports_between_packaged_modules(self):
+        # FEAT-GTS-260: an older library next to a newer libc stopped the game at start (error 127).
+        with tempfile.TemporaryDirectory() as temp, contextlib.chdir(temp):
+            stage = Path('stage'); (stage / 'libs').mkdir(parents=True)
+            (stage / 'libs/libc.prx').write_bytes(linked_pe(exports=('malloc',)))
+            (stage / 'libs/libScePad.prx').write_bytes(linked_pe(imports={'libc.prx': ['malloc'], 'KERNEL32.dll': ['Sleep']}))
+            (stage / 'amd_fidelityfx_vk.dll').write_bytes(pe())
+            pkg.check_package_imports(stage)  # resolved; Windows' own DLLs are not checked
+            exports, imports = pkg.pe_tables((stage / 'libs/libScePad.prx').read_bytes())
+            self.assertEqual(imports, {'libc.prx': ['malloc'], 'kernel32.dll': ['Sleep']})
+            (stage / 'libs/libSceAjm.prx').write_bytes(linked_pe(imports={'LIBC.PRX': ['__cxa_begin_catch', 'malloc']}))
+            with self.assertRaisesRegex(RuntimeError, r'libSceAjm\.prx -> libc\.prx: __cxa_begin_catch'):
+                pkg.check_package_imports(stage)
+
+    def test_stub_never_replaces_real_module(self):
+        # FEAT-GTS-260: this source builds libSceAjm.prx as a stub; the archive's is the real module.
+        with tempfile.TemporaryDirectory() as temp, contextlib.chdir(temp):
+            base = self.fixture()
+            with zipfile.ZipFile(base, 'a') as z:
+                z.writestr(pkg.BASE_FOLDER + '/libs/libSceAjm.prx', linked_pe(exports=('sceAjmInitialize',)))
+                z.writestr(pkg.BASE_FOLDER + '/libs/libSceAudio.prx', linked_pe(exports=('DummyFunction_nid_no_patch',)))
+            for name in ('libSceAjm.prx', 'libSceAudio.prx'):
+                (Path('artifacts/runtime') / name).write_bytes(linked_pe(exports=('DummyFunction_nid_no_patch',)))
+            (Path('artifacts/runtime') / 'libSceNew.prx').write_bytes(linked_pe(exports=('DummyFunction_nid_no_patch',)))
+            self.rehash(Path('artifacts/runtime'))
+            with patch.dict(os.environ, {'CI_COMMIT_SHA': SHA, 'RYGT_PACKAGE_BASE': str(base), 'RENDERER_SHA': RENDERER_SHA}), patch.object(pkg, 'BASE_SHA', pkg.sha(base)):
+                pkg.package(channels='ci')
+            archive = next(Path('dist').glob('RyGTS-ci-*.zip'))
+            prefix = archive.stem + '/'
+            with zipfile.ZipFile(archive) as z:
+                info = json.loads(z.read(prefix + 'BUILD_INFO.txt'))
+                self.assertEqual(pkg.pe_tables(z.read(prefix + 'libs/libSceAjm.prx'))[0], {'sceAjmInitialize'})
+            self.assertIn('libs/libSceAjm.prx', info['retained'])
+            self.assertNotIn('libs/libSceAjm.prx', info['rebuilt'])
+            self.assertIn('libs/libSceAudio.prx', info['rebuilt'])  # a stub may replace a stub
+            self.assertIn('libs/libSceNew.prx', info['rebuilt'])    # and add a module the archive lacks
 
     def test_duplicate_and_symlink_rejected(self):
         for symlink in (False, True):

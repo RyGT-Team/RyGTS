@@ -77,7 +77,7 @@ jobs:
           if ($LASTEXITCODE) { throw 'GitHub fetch failed' }
           git checkout --detach FETCH_HEAD
           if ($LASTEXITCODE -or (git rev-parse HEAD) -cne $env:SOURCE_SHA) { throw 'Source mismatch' }
-      - name: Build Release launcher and renderer
+      - name: Build Release launcher, renderer and runtime libraries
         shell: pwsh
         env:
           RYGT_CODESIGN: '1'
@@ -91,12 +91,14 @@ jobs:
           . ./ci/setup-hosted-windows.ps1
           & ./ci/build-windows.ps1 -Target Launcher
           & ./ci/build-windows.ps1 -Target Renderer -Flavor Release
+          & ./ci/build-windows.ps1 -Target Runtime
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: windows-release-${{ needs.source.outputs.commit }}-renderer-${{ needs.source.outputs.renderer_commit }}
           path: |
             ${{ env.RYGT_CI_ROOT }}/artifacts/launcher/**
             ${{ env.RYGT_CI_ROOT }}/artifacts/renderer/**
+            ${{ env.RYGT_CI_ROOT }}/artifacts/runtime/**
           if-no-files-found: error
           retention-days: 7
   tests:

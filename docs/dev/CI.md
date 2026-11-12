@@ -42,17 +42,29 @@ registry. GitHub intermediate artifacts expire after seven days.
 
 ## Build and validation
 
-Each channel's Windows job builds only its launcher and pinned renderer using
-`ci/setup-hosted-windows.ps1` and `ci/build-windows.ps1`. Its own GitHub Linux
+Each channel's Windows job builds its launcher, its pinned renderer and the runtime
+libraries using `ci/setup-hosted-windows.ps1` and `ci/build-windows.ps1`. Its own GitHub Linux
 job builds and tests the converter with CTest. Packaging requires that
 channel's jobs to succeed and verifies source revisions, artifact checksums,
 runtime archive identity, required files, safe ZIP paths and packaged-file
 checksums.
 
-The Windows converter and other helper/runtime binaries still come from the
-immutable October 25 redistributable archive pinned by SHA-256 in `ci/package.py`.
-They are not rebuilt by this workflow; the Linux test binary is not substituted
-for a Windows executable. BUILD_INFO.txt records exactly what was rebuilt.
+The runtime libraries (`libs/*.prx`, except the renderer's) are built by
+`ci/build-windows.ps1 -Target Runtime` with the MSYS2 UCRT64 GCC 16.2.0 pinned in
+`ci/runtime-toolchain.json`: every MSYS2 package and the FFmpeg prebuilt by file name
+and SHA-256, unpacked by `ci/runtime_toolchain.py`. They replace the base archive's
+copies, together with that toolchain's `libgcc_s_seh-1.dll`, `libstdc++-6.dll` and
+`libwinpthread-1.dll`. Libraries this source does not build (firmware conversions
+such as `libSceAjm.prx` and `libSceNgs2.prx`, NP dialogs, `libSceGnmDriver.prx`, ...),
+the Windows converter and other helpers still come from the immutable October 25
+redistributable archive pinned by SHA-256 in `ci/package.py`. Packaging fails when a
+packaged module imports a function another packaged module does not export, so a
+library that no longer matches the rebuilt `libc`/`libkernel` cannot ship.
+BUILD_INFO.txt records exactly what was rebuilt and what was retained.
+
+To move the toolchain to newer MSYS2 packages, run
+`python ci/runtime_toolchain.py pin <date>` (each package at its newest version
+published on or before that date) and build and test the runtime with the result.
 Game executable/data, firmware, saves, logs, shader caches and NVIDIA SDK files
 are excluded from both packages. Base-archive PDBs remain forbidden; only
 verified matching launcher/renderer symbols are explicitly added to debug-ci.

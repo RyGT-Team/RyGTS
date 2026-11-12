@@ -81,6 +81,101 @@ def verify_bundle(folder, filename, commit, flavor):
 
 
 VARIANTS = (('Release', 'ci', ''), ('Diagnostics', 'debug-ci', '-diagnostics'))
+# FEAT-GTS-260: the MinGW runtime the rebuilt libraries were linked against; they replace the archive's.
+RUNTIME_DLLS = ('libgcc_s_seh-1.dll', 'libstdc++-6.dll', 'libwinpthread-1.dll')
+
+
+def verify_runtime(folder, commit):
+    """The runtime libraries and MinGW DLLs from ci/build-windows.ps1 -Target Runtime, checked against
+    the artifact's own manifest and revision."""
+    verify_artifact(folder, 'libc.prx', commit)
+    names = [line.split('  ', 1)[1] for line in (folder / 'SHA256SUMS.txt').read_text(encoding='utf-8-sig').splitlines()]
+    libraries = sorted(name for name in names if name.lower().endswith('.prx'))
+    if 'libSceVideoOut.prx' in libraries or not {'libc.prx', 'libkernel.prx'} <= set(libraries):
+        raise RuntimeError('Unexpected runtime library set')
+    for dll in RUNTIME_DLLS + ('RUNTIME-TOOLCHAIN.json',):
+        if dll not in names:
+            raise RuntimeError(f'Runtime artifact is missing {dll}')
+    return [folder / name for name in libraries], [folder / name for name in RUNTIME_DLLS]
+
+
+def pe_tables(data):
+    """(exported names, {imported DLL (lower case): [imported names]}) of a PE32 or PE32+ image."""
+    def u16(offset): return int.from_bytes(data[offset:offset + 2], 'little')
+    def u32(offset): return int.from_bytes(data[offset:offset + 4], 'little')
+    def u64(offset): return int.from_bytes(data[offset:offset + 8], 'little')
+    header = u32(0x3c)
+    if data[:2] != b'MZ' or data[header:header + 4] != b'PE\0\0':
+        raise RuntimeError('Not a PE image')
+    sections, optional_size = u16(header + 6), u16(header + 20)
+    optional = header + 24
+    magic = u16(optional)
+    if magic not in (0x10b, 0x20b):  # PE32 (the .NET launcher) or PE32+
+        raise RuntimeError('Not a PE image')
+    wide = magic == 0x20b
+    directories = optional + (112 if wide else 96)
+    table = optional + optional_size
+    spans = [(u32(table + 40 * i + 12), max(u32(table + 40 * i + 8), u32(table + 40 * i + 16)), u32(table + 40 * i + 20))
+             for i in range(sections)]
+
+    def offset(rva):
+        for start, size, raw in spans:
+            if start <= rva < start + size:
+                return rva - start + raw
+        raise RuntimeError('RVA outside the image')
+
+    def text(rva):
+        at = offset(rva)
+        return data[at:data.index(b'\0', at)].decode('ascii', 'replace')
+
+    exports = set()
+    export_rva = u32(directories)
+    if export_rva:
+        at = offset(export_rva)
+        names, name_table = u32(at + 24), u32(at + 32)
+        exports = {text(u32(offset(name_table) + 4 * i)) for i in range(names)}
+    imports = {}
+    import_rva = u32(directories + 8)
+    if import_rva:
+        at = offset(import_rva)
+        while u32(at + 12):
+            thunks = u32(at) or u32(at + 16)
+            entry, names = offset(thunks), []
+            size, read = (8, u64) if wide else (4, u32)
+            while read(entry):
+                value = read(entry)
+                if not value >> (size * 8 - 1):  # high bit: imported by ordinal
+                    names.append(text((value & 0x7fffffff) + 2))
+                entry += size
+            imports.setdefault(text(u32(at + 12)).lower(), []).extend(names)
+            at += 20
+    return exports, imports
+
+
+def is_stub(path):
+    """A placeholder module: it exports nothing but DummyFunction_nid_no_patch. This source builds such
+    stubs for modules it does not implement; libSceAjm.prx and libSceNgs2.prx, for instance, are real
+    (converted) modules in the archive, and the game imports functions from them."""
+    exports, _ = pe_tables(path.read_bytes())
+    return exports <= {'DummyFunction_nid_no_patch'}
+
+
+def check_package_imports(stage):
+    """Every function a packaged module imports from another packaged module must be exported by it:
+    an older library next to a newer libc, say, stops the game at start (error 127)."""
+    modules = {}
+    for path in list(stage.glob('*.dll')) + list(stage.glob('*.exe')) + list((stage / 'libs').glob('*.prx')):
+        modules[path.name.lower()] = path
+    tables = {name: pe_tables(path.read_bytes()) for name, path in modules.items()}
+    missing = []
+    for name, (_, imports) in sorted(tables.items()):
+        for dll, functions in imports.items():
+            if dll not in tables:
+                continue  # Windows, the game's own modules (app0) and the like
+            exported = tables[dll][0]
+            missing += [f'{modules[name].name} -> {dll}: {function}' for function in functions if function not in exported]
+    if missing:
+        raise RuntimeError('Unresolved imports between packaged modules:\n  ' + '\n  '.join(missing[:20]))
 
 
 def extract_runtime(base, stage):
@@ -135,6 +230,22 @@ def assemble(base, commit, flavor, channel, suffix):
     shutil.copy2(root / 'LICENSE', stage / 'LICENSE')
     shutil.copy2(launcher, stage / 'RyGTS.exe')
     shutil.copy2(renderer, stage / 'libs/libSceVideoOut.prx')
+    # FEAT-GTS-260: every runtime library this source builds replaces the archive's copy; the archive
+    # keeps only what it does not build (conversions and modules from other sources).
+    libraries, dlls = verify_runtime(Path('artifacts/runtime'), commit)
+    rebuilt_libraries = []
+    for library in libraries:
+        target = stage / 'libs' / library.name
+        if target.exists() and is_stub(library) and not is_stub(target):
+            continue  # never replace a real module with a stub
+        shutil.copy2(library, target)
+        rebuilt_libraries.append('libs/' + library.name)
+    for dll in dlls:
+        shutil.copy2(dll, stage / dll.name)
+    rebuilt_libraries.sort()
+    retained_libraries = sorted('libs/' + path.name for path in (stage / 'libs').glob('*.prx')
+                                if 'libs/' + path.name not in rebuilt_libraries and path.name != 'libSceVideoOut.prx')
+    check_package_imports(stage)
     (stage / 'tools/amd').mkdir(parents=True, exist_ok=True)
     shutil.copy2(root / 'tools/amd/Add-To-AMD-Software.ps1', stage / 'tools/amd/Add-To-AMD-Software.ps1')
     for name_required in ('converter/ryty.exe', 'tools/adcpatch/adcpatch.exe', 'libs/libSceBluetoothHid.prx',
@@ -148,8 +259,10 @@ def assemble(base, commit, flavor, channel, suffix):
         pipeline=os.environ.get('CI_PIPELINE_URL'), runtime_base_url=BASE_URL, runtime_base_sha256=BASE_SHA,
         renderer_source=source, launcher_version=launcher_version(root), launcher_sha256=sha(launcher),
         renderer_sha256=sha(renderer),
-        rebuilt=['RyGTS.exe', 'libs/libSceVideoOut.prx'],
-        retained='Other runtime libraries and Windows conversion helpers from pinned October 25 archive')
+        rebuilt=['RyGTS.exe', 'libs/libSceVideoOut.prx'] + rebuilt_libraries + list(RUNTIME_DLLS),
+        runtime_toolchain=json.loads((Path('artifacts/runtime') / 'RUNTIME-TOOLCHAIN.json').read_text(encoding='utf-8-sig')),
+        retained=retained_libraries,
+        retained_from='Pinned October 25 archive: the libraries above, the converter and other Windows helpers')
     if suffix:
         # PDBs are forbidden in the base. Only these explicitly verified same-build
         # symbols are admitted to debug-ci, adjacent to their matching modules.
@@ -172,8 +285,9 @@ def assemble(base, commit, flavor, channel, suffix):
             'Debug/Diagnostics is distributed separately as debug-ci.\n'
             'Game executable/data, firmware, saves, logs, caches and NVIDIA SDK DLLs are excluded.\n'
             'Supply required firmware modules and optional NVIDIA upscaler files yourself.\n'
-            'Launcher and renderer are built from this pipeline revision; other runtime files\n'
-            'and Windows conversion helpers come from the checksummed October 25 archive.\n'
+            'Launcher, renderer and runtime libraries are built from this pipeline revision;\n'
+            'the remaining libraries and Windows conversion helpers come from the checksummed\n'
+            'October 25 archive (listed in BUILD_INFO.txt).\n'
             'This is a CI artifact, not a tagged release. See BUILD_INFO.txt and SHA256SUMS.txt.\n', encoding='utf-8')
     (stage / 'BUILD_INFO.txt').write_text(json.dumps(provenance, indent=2) + '\n', encoding='utf-8')
     allowed_pdb = {'RyGTS.pdb', 'libs/libSceVideoOut.pdb'} if suffix else set()
