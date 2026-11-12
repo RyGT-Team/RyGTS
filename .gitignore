@@ -61,3 +61,9 @@ Thumbs.db
 !/ci/tests/
 
 /.ci-renderer-diagnostics/
+
+# FEAT-GTS-263: upstream sources the Tools target clones for adcpatch, and its build output
+tools/GTAdhocToolchain/
+tools/GTToolsSharp/
+tools/adcpatch/bin/
+tools/adcpatch/obj/

@@ -42,36 +42,39 @@ registry. GitHub intermediate artifacts expire after seven days.
 
 ## Build and validation
 
-Each channel's Windows job builds its launcher, its pinned renderer and the runtime
-libraries using `ci/setup-hosted-windows.ps1` and `ci/build-windows.ps1`. Its own GitHub Linux
-job builds and tests the converter with CTest. Packaging requires that
-channel's jobs to succeed and verifies source revisions, artifact checksums,
-runtime archive identity, required files, safe ZIP paths and packaged-file
-checksums.
+Each channel's Windows job builds its launcher, its pinned renderer, the runtime
+libraries and the tools using `ci/setup-hosted-windows.ps1` and `ci/build-windows.ps1`. Its own
+GitHub Linux job builds and tests the converter with CTest. Packaging requires that
+channel's jobs to succeed and verifies source revisions, artifact checksums, required
+files, imports between packaged modules and packaged-file checksums. **Packages are
+assembled only from this pipeline's artifacts, files pinned by SHA-256 and this
+repository** (FEAT-GTS-263); there is no runtime archive any more.
 
 The runtime libraries (`libs/*.prx`, except the renderer's) are built by
 `ci/build-windows.ps1 -Target Runtime` with the MSYS2 UCRT64 GCC 16.2.0 pinned in
 `ci/runtime-toolchain.json`: every MSYS2 package and the FFmpeg prebuilt by file name
-and SHA-256, unpacked by `ci/runtime_toolchain.py`. They replace the base archive's
-copies, together with that toolchain's `libgcc_s_seh-1.dll`, `libstdc++-6.dll` and
-`libwinpthread-1.dll`. That includes the placeholder libraries for PS4 libraries the
+and SHA-256, unpacked by `ci/runtime_toolchain.py`. The same build makes the
+converter (`converter/ryty.exe`) and the wheel probe (`tools/ryty-wheel-probe.exe`); they ship
+with that toolchain's `libgcc_s_seh-1.dll`, `libstdc++-6.dll` and `libwinpthread-1.dll`. That includes the placeholder libraries for PS4 libraries the
 game loads but RyGTS does not implement (NP dialogs, USB, VR, `libSceGnmDriver.prx`,
 ...), generated from the export lists in `core/libs/placeholders`. The renderer step
 also builds the runtime libraries the renderer repository implements (`libSceAjm`,
 `libSceNgs2`, `libSceAudio3d`, `libSceZlib`, `libSceDiscMap`, `libSceScreenShot`,
 `libSceNpAuth`); they are packaged last, over this source's own smaller versions.
-The Windows converter and other helpers still come from the immutable October 25
-redistributable archive pinned by SHA-256 in `ci/package.py`. Packaging fails when a
-packaged module imports a function another packaged module does not export, so a
-library that no longer matches the rebuilt `libc`/`libkernel` cannot ship.
-BUILD_INFO.txt records exactly what was rebuilt and what was retained.
+`ci/build-windows.ps1 -Target Tools` builds `tools/adcpatch` from its pinned upstream
+sources and this repository's patches (`tools/adcpatch/README.txt`, .NET SDK 10.0.401) and
+downloads AMD's FidelityFX runtime (`amd_fidelityfx_vk.dll`, FidelityFX SDK v1.1.4), both
+pinned in `ci/runtime-toolchain.json`. The launcher background, the default
+`CUSA03220.json` (`ci/packaging/`) and the Linux and Camera Manager notes come from this
+repository. Packaging fails when a packaged module imports a function another packaged
+module does not export. BUILD_INFO.txt records where every file came from.
 
 To move the toolchain to newer MSYS2 packages, run
 `python ci/runtime_toolchain.py pin <date>` (each package at its newest version
 published on or before that date) and build and test the runtime with the result.
 Game executable/data, firmware, saves, logs, shader caches and NVIDIA SDK files
-are excluded from both packages. Base-archive PDBs remain forbidden; only
-verified matching launcher/renderer symbols are explicitly added to debug-ci.
+are excluded from both packages. PDBs are not packaged, except the verified
+matching launcher/renderer symbols added to debug-ci.
 Compilation and package validation do not replace live GPU tests.
 
 ## Debug diagnostics
@@ -81,9 +84,8 @@ launcher, with full matching PDBs beside each rebuilt module. Its native
 configuration leaves `NDEBUG` undefined so debug-only capture instrumentation
 and its frame-layout checks are present. Release keeps its normal `Release`
 configuration and `NDEBUG` behavior. Both flavors build directly from the
-resolved ShadGT renderer commit; no renderer source overlay is applied. Other
-runtime helpers retain the same pinned base provenance; this does not provide
-symbols for those helpers.
+resolved ShadGT renderer commit; no renderer source overlay is applied. The runtime
+libraries, converter and tools are Release builds without symbols in both packages.
 
 Extract ci and debug-ci into separate folders. Debug's README explains setup,
 F8 graphics capture, continuous frame timing, visible-frame bursts and offline

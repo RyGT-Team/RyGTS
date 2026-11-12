@@ -11,7 +11,7 @@ line (a few libraries, such as `libSceMbus`, also answer for functions of other 
 `[stub] <library> <NID>` to stderr the first time it is called and returns 0. An empty list makes a
 library that exports only `ryty_stub_none`: the game loads it but calls nothing in it.
 
-The lists were recovered from the placeholder binaries in the October 25 runtime archive, whose source
+The lists were recovered from the placeholder binaries in the former October 25 runtime archive, whose source
 had not been kept (only `libSceMbus` existed as source, in ryGT7's `runtime/gt7`). To implement one of
 these libraries for real, add it under `core/libs/prx/` and delete its list here.
 

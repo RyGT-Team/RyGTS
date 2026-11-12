@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][ValidateSet('Launcher','Renderer','Runtime')][string]$Target, [ValidateSet('Release','Diagnostics')][string]$Flavor='Release')
+param([Parameter(Mandatory=$true)][ValidateSet('Launcher','Renderer','Runtime','Tools')][string]$Target, [ValidateSet('Release','Diagnostics')][string]$Flavor='Release')
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 Set-Location (Split-Path $PSScriptRoot -Parent)
@@ -31,15 +31,51 @@ if ($Target -eq 'Launcher') {
     Invoke-Checked 'cmake' @('-S','.','-B',$build,'-G','Ninja','-DCMAKE_BUILD_TYPE=Release','-DBUILD_TESTING=OFF',
         '-DRTY_BUILD_GUI=OFF','-DRTY_ENABLE_LTO=OFF',"-DCMAKE_C_COMPILER=$toolchain/gcc.exe",
         "-DCMAKE_CXX_COMPILER=$toolchain/g++.exe","-DFFMPEG_PREBUILT_DIR=$ffmpeg")
-    Invoke-Checked 'cmake' @('--build',$build,'--target','libs')
+    # FEAT-GTS-263: the converter (ryty.exe) and the wheel probe too; they came from the archive before.
+    Invoke-Checked 'cmake' @('--build',$build,'--target','libs','ryty','ryty-wheel-probe')
     $libraries = @(Get-ChildItem "$build/core/libs/libs" -Filter *.prx -File | Where-Object Name -ne 'libSceVideoOut.prx')
     foreach ($required in 'libc.prx','libkernel.prx','libScePad.prx') {
         if (!($libraries | Where-Object Name -eq $required)) { throw "Runtime build is missing $required" }
     }
     $libraries | Copy-Item -Destination $out
+    foreach ($program in 'ryty.exe','ryty-wheel-probe.exe') {
+        $built = @(Get-ChildItem $build -Recurse -Filter $program -File)
+        if ($built.Count -ne 1) { throw "Expected exactly one built $program (found $($built.Count))" }
+        Copy-Item $built[0].FullName $out
+    }
     foreach ($dll in 'libgcc_s_seh-1.dll','libstdc++-6.dll','libwinpthread-1.dll') { Copy-Item "$toolchain/$dll" $out }
     Copy-Item ci/runtime-toolchain.json "$out/RUNTIME-TOOLCHAIN.json"
-    Write-Host "Runtime: $($libraries.Count) libraries built with $compiler"
+    Write-Host "Runtime: $($libraries.Count) libraries, the converter and the wheel probe built with $compiler"
+} elseif ($Target -eq 'Tools') {
+    # FEAT-GTS-263: what the October 25 archive used to supply besides the runtime: adcpatch, built
+    # from its pinned upstream sources and this repository's patches (tools/adcpatch/README.txt), and
+    # AMD's FidelityFX runtime, downloaded from AMD's FidelityFX SDK release. Both pinned in
+    # ci/runtime-toolchain.json.
+    $pins = Get-Content ci/runtime-toolchain.json -Raw | ConvertFrom-Json
+    foreach ($source in $pins.adcpatch.sources) {
+        $dir = "tools/$($source.name)"
+        if (Test-Path $dir) { throw "$dir already exists; the Tools target needs a clean checkout" }
+        Invoke-Checked 'git' @('init','-q',$dir)
+        Invoke-Checked 'git' @('-C',$dir,'remote','add','origin',$source.repository)
+        Invoke-Checked 'git' @('-C',$dir,'fetch','-q','--depth','1','origin',$source.commit)
+        Invoke-Checked 'git' @('-C',$dir,'checkout','-q','--detach','FETCH_HEAD')
+        if ((& git -C $dir rev-parse HEAD) -cne $source.commit) { throw "$($source.name) commit mismatch" }
+        Invoke-Checked 'git' @('-C',$dir,'submodule','update','--init','--recursive','--depth','1')
+        Invoke-Checked 'git' @('-C',$dir,'apply','--whitespace=nowarn',(Resolve-Path "tools/adcpatch/$($source.patch)").Path)
+        Copy-Item "$dir/LICENSE" "$out/$($source.name)-LICENSE.txt"
+        if ($source.name -eq 'GTToolsSharp') { Copy-Item "$dir/PDTools/LICENSE" "$out/PDTools-LICENSE.txt" }
+    }
+    $publish = Join-Path (Get-Location) 'build/ci-adcpatch'
+    Invoke-Checked 'dotnet' @('publish','tools/adcpatch/adcpatch.csproj','-c','Release','-r','win-x64','--self-contained',
+        '-p:PublishSingleFile=true','-p:IncludeNativeLibrariesForSelfExtract=true','-p:DebugType=none','-o',$publish,'--nologo')
+    foreach ($file in 'adcpatch.exe','grim.ad','openGrim.ad') { Copy-Item "$publish/$file" $out }
+    Copy-Item tools/adcpatch/README.txt "$out/adcpatch-README.txt"
+    $amd = $pins.fidelityfx
+    foreach ($file in @(@($amd.dll_url, $amd.dll_sha256, 'amd_fidelityfx_vk.dll'), @($amd.license_url, $amd.license_sha256, 'amd_fidelityfx_vk-LICENSE.txt'))) {
+        Invoke-WebRequest -UseBasicParsing $file[0] -OutFile "$out/$($file[2])"
+        if ((Get-FileHash "$out/$($file[2])" -Algorithm SHA256).Hash.ToLowerInvariant() -cne $file[1]) { throw "SHA-256 mismatch for $($file[2])" }
+    }
+    Write-Host "Tools: adcpatch and AMD FidelityFX $($amd.version)"
 } else {
     if (!$env:LLVM_ROOT) { throw 'Set LLVM_ROOT to the LLVM 23.1.3 distribution (see docs/dev/CI.md)' }
     $llvm = (Resolve-Path $env:LLVM_ROOT).Path
