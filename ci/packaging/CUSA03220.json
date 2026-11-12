@@ -1,0 +1,35 @@
+{
+  "GPU": {
+    "copy_gpu_buffers": true,
+    "readbacks_mode": 1,
+    "readback_linear_images_enabled": true,
+    "fsr_enabled": false,
+    "rcas_enabled": true,
+    "system_ram_gb": 16,
+    "image_recycle_mb": 128,
+    "dlss_enabled": false,
+    "dlssg_enabled": false,
+    "precompile_shaders": false,
+    "full_screen": false,
+    "full_screen_mode": "Borderless",
+    "window_width": 1280,
+    "window_height": 720,
+    "fullscreen_refresh_rate": 0,
+    "compile_mode": 2,
+    "native_renderer": true
+  },
+  "Vulkan": {
+    "pipeline_cache_enabled": true,
+    "pipeline_cache_archived": false
+  },
+  "Input": {
+    "background_controller_input": true,
+    "controller_ports": ",,,",
+    "trigger_strength": 42
+  },
+  "General": {
+    "show_splash": true,
+    "show_fps_counter": true,
+    "discord_rpc_enabled": true
+  }
+}

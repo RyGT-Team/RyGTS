@@ -3,18 +3,24 @@ import hashlib
 import importlib.util
 import json
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import re
 import shutil
-import urllib.request
 import zipfile
 
-BASE_URL = ('https://gitlab.com/api/v4/projects/rygt-team%2FRyGTS/packages/generic/'
-            'gt-sport-prerelease/gt-sport-2026-10-25/'
-            'GTSport-Ryty-shadGT-2026-10-25-prerelease%2Ezip')
-BASE_SHA = '563349eb82d091d16a7d6864dca437d17a6dd3aee6f994d256399bf29aae7702'
-BASE_FOLDER = 'GTSport-Ryty-shadGT-2026-10-25-prerelease'
+# Never packaged: game executables and data, firmware, logs (and symbols, except the verified ones).
 FORBIDDEN = {'.self', '.elf', '.sprx', '.pkg', '.vol', '.adc', '.log', '.pdb'}
+# FEAT-GTS-263: what ci/build-windows.ps1 -Target Tools produces (adcpatch and AMD's FidelityFX runtime).
+TOOLS_FILES = ('adcpatch.exe', 'grim.ad', 'openGrim.ad', 'adcpatch-README.txt', 'GTAdhocToolchain-LICENSE.txt',
+               'GTToolsSharp-LICENSE.txt', 'PDTools-LICENSE.txt', 'amd_fidelityfx_vk.dll', 'amd_fidelityfx_vk-LICENSE.txt')
+# Files that come from this repository.
+REPOSITORY_FILES = (('loader/launcher/background.png', 'launcher/background.png'),
+                    ('loader/launcher/README.txt', 'launcher/README.txt'),
+                    ('docs/user/LINUX.md', 'LINUX.txt'),
+                    ('docs/user/CAMERA_MANAGER.md', 'CAMERA_MANAGER.txt'),
+                    ('ci/packaging/CUSA03220.json', 'user/custom_configs/CUSA03220.json'),
+                    ('tools/amd/Add-To-AMD-Software.ps1', 'tools/amd/Add-To-AMD-Software.ps1'),
+                    ('LICENSE', 'LICENSE'))
 
 
 def launcher_version(source_root):
@@ -81,10 +87,10 @@ def verify_bundle(folder, filename, commit, flavor):
 
 
 VARIANTS = (('Release', 'ci', ''), ('Diagnostics', 'debug-ci', '-diagnostics'))
-# FEAT-GTS-260: the MinGW runtime the rebuilt libraries were linked against; they replace the archive's.
+# FEAT-GTS-260: the MinGW runtime the libraries and the converter were linked against.
 RUNTIME_DLLS = ('libgcc_s_seh-1.dll', 'libstdc++-6.dll', 'libwinpthread-1.dll')
 # FIX-GTS-262: runtime libraries the renderer repository implements (ci/build-windows.ps1 -Target Renderer).
-# They are packaged last, over the archive's and this source's own (much smaller) versions.
+# They are packaged last, over this source's own (much smaller) versions.
 RENDERER_LIBRARIES = ('libSceAjm.prx', 'libSceNgs2.prx', 'libSceAudio3d.prx', 'libSceZlib.prx',
                       'libSceDiscMap.prx', 'libSceScreenShot.prx', 'libSceNpAuth.prx')
 
@@ -97,7 +103,7 @@ def verify_runtime(folder, commit):
     libraries = sorted(name for name in names if name.lower().endswith('.prx'))
     if 'libSceVideoOut.prx' in libraries or not {'libc.prx', 'libkernel.prx'} <= set(libraries):
         raise RuntimeError('Unexpected runtime library set')
-    for dll in RUNTIME_DLLS + ('RUNTIME-TOOLCHAIN.json',):
+    for dll in RUNTIME_DLLS + ('RUNTIME-TOOLCHAIN.json', 'ryty.exe', 'ryty-wheel-probe.exe'):
         if dll not in names:
             raise RuntimeError(f'Runtime artifact is missing {dll}')
     return [folder / name for name in libraries], [folder / name for name in RUNTIME_DLLS]
@@ -156,14 +162,6 @@ def pe_tables(data):
     return exports, imports
 
 
-def is_stub(path):
-    """A placeholder module: it exports nothing but DummyFunction_nid_no_patch. This source builds such
-    stubs for modules it does not implement; libSceAjm.prx and libSceNgs2.prx, for instance, are real
-    (converted) modules in the archive, and the game imports functions from them."""
-    exports, _ = pe_tables(path.read_bytes())
-    return exports <= {'DummyFunction_nid_no_patch'}
-
-
 def check_package_imports(stage):
     """Every function a packaged module imports from another packaged module must be exported by it:
     an older library next to a newer libc, say, stops the game at start (error 127)."""
@@ -182,36 +180,7 @@ def check_package_imports(stage):
         raise RuntimeError('Unresolved imports between packaged modules:\n  ' + '\n  '.join(missing[:20]))
 
 
-def extract_runtime(base, stage):
-    copied = set()
-    with zipfile.ZipFile(base) as archive:
-        for entry in archive.infolist():
-            path = PurePosixPath(entry.filename)
-            if (path.is_absolute() or '..' in path.parts or '\\' in entry.orig_filename
-                    or any(':' in part for part in path.parts)
-                    or not path.parts or path.parts[0] != BASE_FOLDER):
-                raise RuntimeError('Unsafe runtime archive path')
-            if entry.is_dir():
-                continue
-            relative = PurePosixPath(*path.parts[1:])
-            lowered = relative.as_posix().lower()
-            if (relative.suffix.lower() in FORBIDDEN or relative.name.lower() == 'gtsport.exe'
-                    or (relative.suffix.lower() == '.dll' and relative.name.lower().startswith(('nvngx_', 'sl.')))
-                    or any(part.lower() in {'app0', 'sys', 'shaders', 'logs', 'saves', '_sd', 'convert'} for part in relative.parts)
-                    or (relative.parts[0].lower() == 'user' and lowered != 'user/custom_configs/cusa03220.json')
-                    or (entry.external_attr >> 16) & 0o170000 == 0o120000):
-                raise RuntimeError(f'Forbidden runtime package content: {relative}')
-            if lowered in copied:
-                raise RuntimeError('Duplicate package path')
-            copied.add(lowered)
-            if lowered in {'build_info.txt', 'sha256sums.txt', 'readme.txt', 'rygt.exe', 'rygts.exe', 'libs/libscevideoout.prx'}:
-                continue
-            target = stage / relative.as_posix()
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(archive.read(entry))
-
-
-def assemble(base, commit, flavor, channel, suffix):
+def assemble(commit, flavor, channel, suffix):
     launcher_folder = Path('artifacts/launcher' + suffix)
     renderer_folder = Path('artifacts/renderer' + suffix)
     launcher = verify_bundle(launcher_folder, 'RyGTS.exe', commit, flavor)
@@ -230,33 +199,40 @@ def assemble(base, commit, flavor, channel, suffix):
     name = f'RyGTS-{channel}-{commit[:8]}'
     destination = Path('dist'); stage = destination / name
     stage.mkdir(parents=True, exist_ok=False)
-    extract_runtime(base, stage)
-    shutil.copy2(root / 'LICENSE', stage / 'LICENSE')
-    shutil.copy2(launcher, stage / 'RyGTS.exe')
-    shutil.copy2(renderer, stage / 'libs/libSceVideoOut.prx')
-    # FEAT-GTS-260: every runtime library this source builds replaces the archive's copy; the archive
-    # keeps only what it does not build (conversions and modules from other sources).
-    libraries, dlls = verify_runtime(Path('artifacts/runtime'), commit)
-    rebuilt_libraries = []
+
+    def place(source, relative):
+        target = stage / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+
+    # FEAT-GTS-263: every file is built by this pipeline, downloaded pinned by the Tools target, or
+    # taken from this repository; there is no runtime archive any more.
+    for repository_file, relative in REPOSITORY_FILES:
+        place(root / repository_file, relative)
+    place(launcher, 'RyGTS.exe')
+    place(renderer, 'libs/libSceVideoOut.prx')
+    runtime_folder = Path('artifacts/runtime')
+    libraries, dlls = verify_runtime(runtime_folder, commit)
     for library in libraries:
-        target = stage / 'libs' / library.name
-        if target.exists() and is_stub(library) and not is_stub(target):
-            continue  # never replace a real module with a stub
-        shutil.copy2(library, target)
-        rebuilt_libraries.append('libs/' + library.name)
+        place(library, 'libs/' + library.name)
     for dll in dlls:
-        shutil.copy2(dll, stage / dll.name)
+        place(dll, dll.name)
+        place(dll, 'converter/' + dll.name)  # the converter is linked against the same runtime
+    place(runtime_folder / 'ryty.exe', 'converter/ryty.exe')
+    place(runtime_folder / 'ryty-wheel-probe.exe', 'tools/ryty-wheel-probe.exe')
     for library_name in RENDERER_LIBRARIES:
-        shutil.copy2(verify_artifact(renderer_folder, library_name, commit), stage / 'libs' / library_name)
-        if 'libs/' + library_name not in rebuilt_libraries:
-            rebuilt_libraries.append('libs/' + library_name)
-    rebuilt_libraries.sort()
-    retained_libraries = sorted('libs/' + path.name for path in (stage / 'libs').glob('*.prx')
-                                if 'libs/' + path.name not in rebuilt_libraries and path.name != 'libSceVideoOut.prx')
+        place(verify_artifact(renderer_folder, library_name, commit), 'libs/' + library_name)
+    tools_folder = Path('artifacts/tools')
+    for file in TOOLS_FILES:
+        kind = 'pe' if file.endswith(('.exe', '.dll')) else 'data'
+        tool = verify_artifact(tools_folder, file, commit, kind)
+        if file.startswith('amd_fidelityfx_vk'):
+            place(tool, file)
+        else:
+            place(tool, 'tools/adcpatch/' + ('README.txt' if file == 'adcpatch-README.txt' else file))
     check_package_imports(stage)
-    (stage / 'tools/amd').mkdir(parents=True, exist_ok=True)
-    shutil.copy2(root / 'tools/amd/Add-To-AMD-Software.ps1', stage / 'tools/amd/Add-To-AMD-Software.ps1')
-    for name_required in ('converter/ryty.exe', 'tools/adcpatch/adcpatch.exe', 'libs/libSceBluetoothHid.prx',
+    for name_required in ('converter/ryty.exe', 'tools/adcpatch/adcpatch.exe', 'tools/ryty-wheel-probe.exe',
+                          'libs/libc.prx', 'libs/libkernel.prx', 'libs/libSceBluetoothHid.prx',
                           'amd_fidelityfx_vk.dll', 'amd_fidelityfx_vk-LICENSE.txt', 'launcher/background.png',
                           'user/custom_configs/CUSA03220.json'):
         if not (stage / name_required).is_file():
@@ -264,15 +240,19 @@ def assemble(base, commit, flavor, channel, suffix):
     write_packaged_defaults(stage)
     provenance = dict(commit=commit, flavor=flavor, channel=channel,
         configuration='RelWithDebInfo' if suffix else 'Release', optimized=True,
-        pipeline=os.environ.get('CI_PIPELINE_URL'), runtime_base_url=BASE_URL, runtime_base_sha256=BASE_SHA,
+        pipeline=os.environ.get('CI_PIPELINE_URL'),
         renderer_source=source, launcher_version=launcher_version(root), launcher_sha256=sha(launcher),
         renderer_sha256=sha(renderer),
-        rebuilt=['RyGTS.exe', 'libs/libSceVideoOut.prx'] + rebuilt_libraries + list(RUNTIME_DLLS),
-        runtime_toolchain=json.loads((Path('artifacts/runtime') / 'RUNTIME-TOOLCHAIN.json').read_text(encoding='utf-8-sig')),
-        retained=retained_libraries,
-        retained_from='Pinned October 25 archive: the libraries above, the converter and other Windows helpers')
+        runtime_toolchain=json.loads((runtime_folder / 'RUNTIME-TOOLCHAIN.json').read_text(encoding='utf-8-sig')),
+        sources=dict(
+            built=['RyGTS.exe', 'libs/libSceVideoOut.prx', 'converter/ryty.exe', 'tools/ryty-wheel-probe.exe',
+                   'tools/adcpatch/adcpatch.exe'] + sorted('libs/' + library.name for library in libraries) +
+                  ['libs/' + name for name in RENDERER_LIBRARIES if name not in {library.name for library in libraries}],
+            toolchain=list(RUNTIME_DLLS) + ['converter/' + dll for dll in RUNTIME_DLLS],
+            downloaded=['amd_fidelityfx_vk.dll', 'amd_fidelityfx_vk-LICENSE.txt'],
+            repository=[relative for _, relative in REPOSITORY_FILES]))
     if suffix:
-        # PDBs are forbidden in the base. Only these explicitly verified same-build
+        # PDBs are not packaged. Only these explicitly verified same-build
         # symbols are admitted to debug-ci, adjacent to their matching modules.
         for folder, pdb_name, target in ((launcher_folder, 'RyGTS.pdb', 'RyGTS.pdb'),
                                         (renderer_folder, 'libSceVideoOut.pdb', 'libs/libSceVideoOut.pdb')):
@@ -293,15 +273,16 @@ def assemble(base, commit, flavor, channel, suffix):
             'Debug/Diagnostics is distributed separately as debug-ci.\n'
             'Game executable/data, firmware, saves, logs, caches and NVIDIA SDK DLLs are excluded.\n'
             'Supply required firmware modules and optional NVIDIA upscaler files yourself.\n'
-            'Launcher, renderer and runtime libraries are built from this pipeline revision;\n'
-            'the remaining libraries and Windows conversion helpers come from the checksummed\n'
-            'October 25 archive (listed in BUILD_INFO.txt).\n'
+            'Everything here is built from this pipeline revision, downloaded pinned by checksum\n'
+            '(AMD FidelityFX runtime) or taken from the source repository: see BUILD_INFO.txt.\n'
             'This is a CI artifact, not a tagged release. See BUILD_INFO.txt and SHA256SUMS.txt.\n', encoding='utf-8')
     (stage / 'BUILD_INFO.txt').write_text(json.dumps(provenance, indent=2) + '\n', encoding='utf-8')
     allowed_pdb = {'RyGTS.pdb', 'libs/libSceVideoOut.pdb'} if suffix else set()
     for file in stage.rglob('*'):
         if file.is_file() and file.suffix.lower() == '.pdb' and file.relative_to(stage).as_posix() not in allowed_pdb:
             raise RuntimeError('Unexpected packaged symbols')
+        if file.is_file() and file.suffix.lower() in FORBIDDEN - {'.pdb'}:
+            raise RuntimeError(f'Forbidden package content: {file.relative_to(stage)}')
     manifest = {file.relative_to(stage).as_posix(): sha(file) for file in sorted(stage.rglob('*')) if file.is_file()}
     (stage / 'SHA256SUMS.txt').write_text(''.join(f'{digest}  {name}\n' for name, digest in manifest.items()), encoding='utf-8')
     result = destination / (name + '.zip')
@@ -330,13 +311,7 @@ def package(channels=None):
         raise ValueError('Invalid CI package channel selection')
     requested = set(channels)
     channels = tuple(channel for channel in valid_channels if channel in requested)
-    base = Path(os.environ.get('RYGT_PACKAGE_BASE', '.ci-runtime-base.zip'))
-    if not base.exists():
-        headers = {'JOB-TOKEN': os.environ['CI_JOB_TOKEN']} if os.environ.get('CI_JOB_TOKEN') else {}
-        with urllib.request.urlopen(urllib.request.Request(BASE_URL, headers=headers)) as response, base.open('wb') as output:
-            shutil.copyfileobj(response, output)
-    if sha(base) != BASE_SHA: raise RuntimeError('Pinned runtime archive checksum mismatch')
-    variants = [assemble(base, commit, *variant) for variant in VARIANTS if variant[1] in channels]
+    variants = [assemble(commit, *variant) for variant in VARIANTS if variant[1] in channels]
     if len({variant['renderer_commit'] for variant in variants}) != 1:
         raise RuntimeError('Renderer revisions differ between package variants')
     (Path('dist') / 'CI-PACKAGES.json').write_text(json.dumps(dict(schema=2, commit=commit, renderer_commit=variants[0]['renderer_commit'], variants=variants), indent=2) + '\n')

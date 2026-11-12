@@ -163,8 +163,8 @@ def pin(cutoff):
                          'sha256': sha256(download(name, cache / name))})
     previous = json.loads(PINS.read_text(encoding='utf-8-sig')) if PINS.exists() else {}
     document = {'repository': REPOSITORY, 'cutoff': cutoff, 'packages': packages}
-    if 'ffmpeg' in previous:
-        document['ffmpeg'] = previous['ffmpeg']
+    for key, value in previous.items():  # ffmpeg, adcpatch, fidelityfx: pinned by hand
+        document.setdefault(key, value)
     PINS.write_text(json.dumps(document, indent=2) + '\n', encoding='utf-8')
     for package in packages:
         print(package['file'], package['published'])

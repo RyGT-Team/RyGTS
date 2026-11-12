@@ -8,8 +8,8 @@ setup points each at your own game dump and firmware modules.
 
 Run this folder's RyGTS.exe. Close
 the Release game first. PDBs are beside the matching launcher and renderer for
-automatic debugger discovery. Symbols cover the rebuilt launcher and renderer;
-other helpers/runtime libraries are retained from the pinned runtime archive.
+automatic debugger discovery. Symbols cover the launcher and renderer; the runtime
+libraries, converter and tools are Release builds of the same revision, without symbols.
 BUILD_INFO.txt identifies the source, diagnostics overlay, binaries and symbols.
 
 Optional capture tools require Python 3.12 or newer. Run

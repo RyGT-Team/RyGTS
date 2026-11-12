@@ -82,17 +82,6 @@ def linked_pe(exports=(), imports=None):
 
 class PackageTests(unittest.TestCase):
     def fixture(self):
-        base = Path('base.zip')
-        with zipfile.ZipFile(base, 'w') as z:
-            for name in ('converter/ryty.exe', 'tools/adcpatch/adcpatch.exe',
-                         'amd_fidelityfx_vk-LICENSE.txt', 'launcher/background.png'):
-                z.writestr(pkg.BASE_FOLDER + '/' + name, b'fixture')
-            # Packaged modules are PE images; the archive's own libc is replaced by the rebuilt one.
-            for name in ('libs/libSceBluetoothHid.prx', 'amd_fidelityfx_vk.dll', 'libs/libc.prx', 'libstdc++-6.dll'):
-                z.writestr(pkg.BASE_FOLDER + '/' + name, pe())
-            z.writestr(pkg.BASE_FOLDER + '/user/custom_configs/CUSA03220.json',
-                       json.dumps({'GPU': {'precompile_shaders': False},
-                                   'Vulkan': {'pipeline_cache_enabled': False}}))
         pin = json.loads((ROOT / 'renderer/source.json').read_text())
         for flavor, _, suffix in pkg.VARIANTS:
             for target, binary in (('launcher', 'RyGTS.exe'), ('renderer', 'libSceVideoOut.prx')):
@@ -123,13 +112,21 @@ class PackageTests(unittest.TestCase):
         (runtime / 'libScePad.prx').write_bytes(linked_pe(imports={'libc.prx': ['__cxa_throw'], 'KERNEL32.dll': ['Sleep']}))
         # This source's own (smaller) libSceAudio3d: the renderer's must replace it (FIX-GTS-262).
         (runtime / 'libSceAudio3d.prx').write_bytes(linked_pe(exports=('runtime_audio3d',)))
+        (runtime / 'libSceBluetoothHid.prx').write_bytes(linked_pe(exports=('ryty_stub_none',)))
+        for program in ('ryty.exe', 'ryty-wheel-probe.exe'):  # FEAT-GTS-263
+            (runtime / program).write_bytes(linked_pe(exports=(program,)))
         for dll in pkg.RUNTIME_DLLS:
             (runtime / dll).write_bytes(pe())
         (runtime / 'RUNTIME-TOOLCHAIN.json').write_text(json.dumps({'packages': [], 'ffmpeg': {}}))
         (runtime / 'RYGT-COMMIT.txt').write_text(SHA)
         (runtime / 'BUILD-PROFILE.json').write_text(json.dumps(dict(schema=1, flavor='Release', commit=SHA, optimized=True, full_symbols=False)))
         self.rehash(runtime)
-        return base
+        tools = Path('artifacts/tools')  # FEAT-GTS-263: ci/build-windows.ps1 -Target Tools
+        tools.mkdir(parents=True)
+        for file in pkg.TOOLS_FILES:
+            (tools / file).write_bytes(linked_pe(exports=(file,)) if file.endswith(('.exe', '.dll')) else file.encode())
+        (tools / 'RYGT-COMMIT.txt').write_text(SHA)
+        self.rehash(tools)
 
     def rehash(self, folder):
         (folder / 'SHA256SUMS.txt').write_text(''.join(
@@ -138,8 +135,8 @@ class PackageTests(unittest.TestCase):
 
     def test_separate_archives_symbols_defaults_and_provenance(self):
         with tempfile.TemporaryDirectory() as temp, contextlib.chdir(temp):
-            base = self.fixture()
-            with patch.dict(os.environ, {'CI_COMMIT_SHA': SHA, 'RYGT_PACKAGE_BASE': str(base), 'RENDERER_SHA': RENDERER_SHA}), patch.object(pkg, 'BASE_SHA', pkg.sha(base)):
+            self.fixture()
+            with patch.dict(os.environ, {'CI_COMMIT_SHA': SHA, 'RENDERER_SHA': RENDERER_SHA}):
                 pkg.package()
             manifest = json.loads(Path('dist/CI-PACKAGES.json').read_text())
             self.assertEqual(manifest['renderer_commit'], RENDERER_SHA)
@@ -159,16 +156,31 @@ class PackageTests(unittest.TestCase):
                     info = json.loads(z.read(prefix + 'BUILD_INFO.txt'))
                     self.assertEqual(info['commit'], SHA)
                     self.assertEqual(info['channel'], variant['channel'])
-                    self.assertEqual(info['rebuilt'], ['RyGTS.exe', 'libs/libSceVideoOut.prx'] + sorted(
-                        ['libs/libScePad.prx', 'libs/libc.prx', 'libs/libkernel.prx'] +
-                        ['libs/' + name for name in pkg.RENDERER_LIBRARIES]) + list(pkg.RUNTIME_DLLS))
+                    sources = info['sources']
+                    self.assertIn('converter/ryty.exe', sources['built'])
+                    self.assertIn('tools/adcpatch/adcpatch.exe', sources['built'])
+                    self.assertTrue({'libs/libc.prx', 'libs/libkernel.prx', 'libs/libScePad.prx'} <= set(sources['built']))
+                    self.assertTrue({'libs/' + name for name in pkg.RENDERER_LIBRARIES} <= set(sources['built']))
+                    self.assertEqual(sources['downloaded'], ['amd_fidelityfx_vk.dll', 'amd_fidelityfx_vk-LICENSE.txt'])
+                    self.assertNotIn('runtime_base_url', info)
+                    self.assertNotIn('retained', info)
                     # The renderer's libraries win over this source's own versions.
                     self.assertEqual(pkg.pe_tables(z.read(prefix + 'libs/libSceAudio3d.prx'))[0], {'renderer_libSceAudio3d'})
                     self.assertEqual(pkg.pe_tables(z.read(prefix + 'libs/libSceAjm.prx'))[0], {'renderer_libSceAjm'})
-                    self.assertEqual(info['retained'], ['libs/libSceBluetoothHid.prx'])
-                    # The rebuilt libc and MinGW runtime replace the archive's copies.
-                    self.assertEqual(z.read(prefix + 'libs/libc.prx'), Path('artifacts/runtime/libc.prx').read_bytes())
-                    self.assertEqual(z.read(prefix + 'libstdc++-6.dll'), Path('artifacts/runtime/libstdc++-6.dll').read_bytes())
+                    # FEAT-GTS-263: every file comes from an artifact of this pipeline or the repository.
+                    for packaged, source in (('libs/libc.prx', 'artifacts/runtime/libc.prx'),
+                                             ('libstdc++-6.dll', 'artifacts/runtime/libstdc++-6.dll'),
+                                             ('converter/ryty.exe', 'artifacts/runtime/ryty.exe'),
+                                             ('converter/libstdc++-6.dll', 'artifacts/runtime/libstdc++-6.dll'),
+                                             ('tools/ryty-wheel-probe.exe', 'artifacts/runtime/ryty-wheel-probe.exe'),
+                                             ('tools/adcpatch/adcpatch.exe', 'artifacts/tools/adcpatch.exe'),
+                                             ('tools/adcpatch/README.txt', 'artifacts/tools/adcpatch-README.txt'),
+                                             ('amd_fidelityfx_vk.dll', 'artifacts/tools/amd_fidelityfx_vk.dll'),
+                                             ('launcher/background.png', str(ROOT / 'loader/launcher/background.png')),
+                                             ('LINUX.txt', str(ROOT / 'docs/user/LINUX.md'))):
+                        self.assertEqual(z.read(prefix + packaged), Path(source).read_bytes(), packaged)
+                    config = json.loads(z.read(prefix + 'user/custom_configs/CUSA03220.json'))
+                    self.assertTrue(config['GPU']['native_renderer'])  # the repository's defaults, then the packaged ones
                     self.assertEqual(info['renderer_source'].splitlines(), [
                         'https://github.com/RyGT-Team/shadGT.git', RENDERER_SHA])
                     self.assertNotIn('runtime_overlay', info)
@@ -179,49 +191,49 @@ class PackageTests(unittest.TestCase):
 
     def test_both_flavors_require_expected_renderer(self):
         with tempfile.TemporaryDirectory() as temp, contextlib.chdir(temp):
-            base = self.fixture()
+            self.fixture()
             folder = Path('artifacts/renderer-diagnostics')
             source = folder / 'CI-SOURCE.txt'
             lines = source.read_text().splitlines()
             source.write_text(lines[0] + '\n' + 'c' * 40 + '\n')
             self.rehash(folder)
-            with patch.dict(os.environ, {'CI_COMMIT_SHA': SHA, 'RYGT_PACKAGE_BASE': str(base), 'RENDERER_SHA': RENDERER_SHA}), patch.object(pkg, 'BASE_SHA', pkg.sha(base)):
+            with patch.dict(os.environ, {'CI_COMMIT_SHA': SHA, 'RENDERER_SHA': RENDERER_SHA}):
                 with self.assertRaisesRegex(RuntimeError, 'Renderer source revision mismatch'):
                     pkg.package()
 
     def test_local_head_packages_matching_variants_without_env(self):
         with tempfile.TemporaryDirectory() as temp, contextlib.chdir(temp):
-            base = self.fixture()
-            env = {'CI_COMMIT_SHA': SHA, 'RYGT_PACKAGE_BASE': str(base)}
-            with patch.dict(os.environ, env, clear=True), patch.object(pkg, 'BASE_SHA', pkg.sha(base)):
+            self.fixture()
+            env = {'CI_COMMIT_SHA': SHA}
+            with patch.dict(os.environ, env, clear=True):
                 pkg.package()
             manifest = json.loads(Path('dist/CI-PACKAGES.json').read_text())
             self.assertEqual(manifest['renderer_commit'], RENDERER_SHA)
 
     def test_local_head_rejects_mixed_flavors(self):
         with tempfile.TemporaryDirectory() as temp, contextlib.chdir(temp):
-            base = self.fixture()
+            self.fixture()
             folder = Path('artifacts/renderer-diagnostics')
             source = folder / 'CI-SOURCE.txt'; lines = source.read_text().splitlines()
             source.write_text(lines[0] + '\n' + 'c' * 40 + '\n')
             self.rehash(folder)
-            env = {'CI_COMMIT_SHA': SHA, 'RYGT_PACKAGE_BASE': str(base)}
-            with patch.dict(os.environ, env, clear=True), patch.object(pkg, 'BASE_SHA', pkg.sha(base)):
+            env = {'CI_COMMIT_SHA': SHA}
+            with patch.dict(os.environ, env, clear=True):
                 with self.assertRaisesRegex(RuntimeError, 'Renderer revisions differ'):
                     pkg.package()
 
     def test_package_builds_only_selected_flavor(self):
         for selected, removed_suffix in (('ci', '-diagnostics'), ('debug-ci', '')):
             with self.subTest(selected=selected), tempfile.TemporaryDirectory() as temp, contextlib.chdir(temp):
-                base = self.fixture()
+                self.fixture()
                 if removed_suffix:
                     shutil.rmtree(Path('artifacts/launcher' + removed_suffix))
                     shutil.rmtree(Path('artifacts/renderer' + removed_suffix))
                 else:
                     shutil.rmtree(Path('artifacts/launcher'))
                     shutil.rmtree(Path('artifacts/renderer'))
-                env = {'CI_COMMIT_SHA': SHA, 'RYGT_PACKAGE_BASE': str(base), 'CI_CHANNEL': selected}
-                with patch.dict(os.environ, env, clear=True), patch.object(pkg, 'BASE_SHA', pkg.sha(base)):
+                env = {'CI_COMMIT_SHA': SHA, 'CI_CHANNEL': selected}
+                with patch.dict(os.environ, env, clear=True):
                     pkg.package()
                 manifest = json.loads(Path('dist/CI-PACKAGES.json').read_text())
                 self.assertEqual([variant['channel'] for variant in manifest['variants']], [selected])
@@ -302,32 +314,16 @@ class PackageTests(unittest.TestCase):
                 prepare_renderer.prepare(prepared)
 
             identity = (prepared / 'CI-SOURCE.txt').read_text()
-            base = self.fixture()
+            self.fixture()
             for suffix in ('', '-diagnostics'):
                 folder = Path('artifacts/renderer' + suffix)
                 (folder / 'CI-SOURCE.txt').write_text(identity)
                 self.rehash(folder)
-            with patch.dict(os.environ, {'CI_COMMIT_SHA': SHA, 'RYGT_PACKAGE_BASE': str(base),
-                                         'RENDERER_SHA': RENDERER_SHA}), \
-                    patch.object(pkg, 'BASE_SHA', pkg.sha(base)):
+            with patch.dict(os.environ, {'CI_COMMIT_SHA': SHA, 'RENDERER_SHA': RENDERER_SHA}):
                 pkg.package()
             manifest = json.loads(Path('dist/CI-PACKAGES.json').read_text())
             self.assertEqual(manifest['renderer_commit'], RENDERER_SHA)
 
-    def test_forbidden_runtime_content(self):
-        bad = ('module.sprx', 'symbols.pdb', 'GTSport.exe', 'shaders/x.bin', 'saves/x.dat',
-               'sys/module.bin', 'user/private.json', 'nvngx_dlss.dll', 'sl.interposer.dll',
-               '../outside', 'x:stream', 'x\\outside')
-        for name in bad:
-            with self.subTest(name=name), tempfile.TemporaryDirectory() as temp, contextlib.chdir(temp):
-                with zipfile.ZipFile('base.zip', 'w') as z:
-                    entry = zipfile.ZipInfo()
-                    # Windows ZipInfo construction normalizes backslashes; retain
-                    # the raw hostile spelling to exercise the extraction guard.
-                    entry.filename = pkg.BASE_FOLDER + '/' + name
-                    z.writestr(entry, b'excluded')
-                with self.assertRaises(RuntimeError):
-                    pkg.extract_runtime(Path('base.zip'), Path('stage'))
 
     def test_unresolved_imports_between_packaged_modules(self):
         # FEAT-GTS-260: an older library next to a newer libc stopped the game at start (error 127).
@@ -343,39 +339,17 @@ class PackageTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, r'libSceAjm\.prx -> libc\.prx: __cxa_begin_catch'):
                 pkg.check_package_imports(stage)
 
-    def test_stub_never_replaces_real_module(self):
-        # FEAT-GTS-260: this source builds libSceCamera.prx as a stub; the archive's is the real module.
-        with tempfile.TemporaryDirectory() as temp, contextlib.chdir(temp):
-            base = self.fixture()
-            with zipfile.ZipFile(base, 'a') as z:
-                z.writestr(pkg.BASE_FOLDER + '/libs/libSceCamera.prx', linked_pe(exports=('sceCameraOpen',)))
-                z.writestr(pkg.BASE_FOLDER + '/libs/libSceAudio.prx', linked_pe(exports=('DummyFunction_nid_no_patch',)))
-            for name in ('libSceCamera.prx', 'libSceAudio.prx'):
-                (Path('artifacts/runtime') / name).write_bytes(linked_pe(exports=('DummyFunction_nid_no_patch',)))
-            (Path('artifacts/runtime') / 'libSceNew.prx').write_bytes(linked_pe(exports=('DummyFunction_nid_no_patch',)))
-            self.rehash(Path('artifacts/runtime'))
-            with patch.dict(os.environ, {'CI_COMMIT_SHA': SHA, 'RYGT_PACKAGE_BASE': str(base), 'RENDERER_SHA': RENDERER_SHA}), patch.object(pkg, 'BASE_SHA', pkg.sha(base)):
-                pkg.package(channels='ci')
-            archive = next(Path('dist').glob('RyGTS-ci-*.zip'))
-            prefix = archive.stem + '/'
-            with zipfile.ZipFile(archive) as z:
-                info = json.loads(z.read(prefix + 'BUILD_INFO.txt'))
-                self.assertEqual(pkg.pe_tables(z.read(prefix + 'libs/libSceCamera.prx'))[0], {'sceCameraOpen'})
-            self.assertIn('libs/libSceCamera.prx', info['retained'])
-            self.assertNotIn('libs/libSceCamera.prx', info['rebuilt'])
-            self.assertIn('libs/libSceAudio.prx', info['rebuilt'])  # a stub may replace a stub
-            self.assertIn('libs/libSceNew.prx', info['rebuilt'])    # and add a module the archive lacks
 
-    def test_duplicate_and_symlink_rejected(self):
-        for symlink in (False, True):
-            with self.subTest(symlink=symlink), tempfile.TemporaryDirectory() as temp, contextlib.chdir(temp):
-                with zipfile.ZipFile('base.zip', 'w') as z:
-                    entry = zipfile.ZipInfo(pkg.BASE_FOLDER + '/safe.txt')
-                    if symlink: entry.external_attr = 0o120777 << 16
-                    z.writestr(entry, b'fixture')
-                    if not symlink: z.writestr(pkg.BASE_FOLDER + '/SAFE.txt', b'duplicate')
-                with self.assertRaises(RuntimeError):
-                    pkg.extract_runtime(Path('base.zip'), Path('stage'))
+
+    def test_missing_tools_artifact_rejected(self):
+        # FEAT-GTS-263: nothing falls back to an archive any more.
+        with tempfile.TemporaryDirectory() as temp, contextlib.chdir(temp):
+            self.fixture()
+            (Path('artifacts/tools') / 'adcpatch.exe').unlink()
+            self.rehash(Path('artifacts/tools'))
+            with patch.dict(os.environ, {'CI_COMMIT_SHA': SHA, 'RENDERER_SHA': RENDERER_SHA}):
+                with self.assertRaisesRegex(RuntimeError, 'adcpatch.exe'):
+                    pkg.package(channels='ci')
 
 
 if __name__ == '__main__':
