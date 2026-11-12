@@ -83,6 +83,10 @@ def verify_bundle(folder, filename, commit, flavor):
 VARIANTS = (('Release', 'ci', ''), ('Diagnostics', 'debug-ci', '-diagnostics'))
 # FEAT-GTS-260: the MinGW runtime the rebuilt libraries were linked against; they replace the archive's.
 RUNTIME_DLLS = ('libgcc_s_seh-1.dll', 'libstdc++-6.dll', 'libwinpthread-1.dll')
+# FIX-GTS-262: runtime libraries the renderer repository implements (ci/build-windows.ps1 -Target Renderer).
+# They are packaged last, over the archive's and this source's own (much smaller) versions.
+RENDERER_LIBRARIES = ('libSceAjm.prx', 'libSceNgs2.prx', 'libSceAudio3d.prx', 'libSceZlib.prx',
+                      'libSceDiscMap.prx', 'libSceScreenShot.prx', 'libSceNpAuth.prx')
 
 
 def verify_runtime(folder, commit):
@@ -242,6 +246,10 @@ def assemble(base, commit, flavor, channel, suffix):
         rebuilt_libraries.append('libs/' + library.name)
     for dll in dlls:
         shutil.copy2(dll, stage / dll.name)
+    for library_name in RENDERER_LIBRARIES:
+        shutil.copy2(verify_artifact(renderer_folder, library_name, commit), stage / 'libs' / library_name)
+        if 'libs/' + library_name not in rebuilt_libraries:
+            rebuilt_libraries.append('libs/' + library_name)
     rebuilt_libraries.sort()
     retained_libraries = sorted('libs/' + path.name for path in (stage / 'libs').glob('*.prx')
                                 if 'libs/' + path.name not in rebuilt_libraries and path.name != 'libSceVideoOut.prx')
