@@ -105,6 +105,8 @@ class PackageTests(unittest.TestCase):
                     full_symbols=bool(suffix))))
                 if target == 'renderer':
                     (folder / 'CI-SOURCE.txt').write_text(pin['repository'] + '\n' + RENDERER_SHA + '\n')
+                    for library in pkg.RENDERER_LIBRARIES:  # FIX-GTS-262
+                        (folder / library).write_bytes(linked_pe(exports=('renderer_' + library.split('.')[0],)))
                 if suffix:
                     pdb = folder / (Path(binary).stem + '.pdb')
                     pdb.write_bytes(b'Microsoft C/C++ MSF 7.00 fixture')
@@ -119,6 +121,8 @@ class PackageTests(unittest.TestCase):
         (runtime / 'libc.prx').write_bytes(linked_pe(exports=('__cxa_throw', 'malloc')))
         (runtime / 'libkernel.prx').write_bytes(linked_pe(exports=('sceKernelOpen',), imports={'libc.prx': ['malloc']}))
         (runtime / 'libScePad.prx').write_bytes(linked_pe(imports={'libc.prx': ['__cxa_throw'], 'KERNEL32.dll': ['Sleep']}))
+        # This source's own (smaller) libSceAudio3d: the renderer's must replace it (FIX-GTS-262).
+        (runtime / 'libSceAudio3d.prx').write_bytes(linked_pe(exports=('runtime_audio3d',)))
         for dll in pkg.RUNTIME_DLLS:
             (runtime / dll).write_bytes(pe())
         (runtime / 'RUNTIME-TOOLCHAIN.json').write_text(json.dumps({'packages': [], 'ffmpeg': {}}))
@@ -155,8 +159,12 @@ class PackageTests(unittest.TestCase):
                     info = json.loads(z.read(prefix + 'BUILD_INFO.txt'))
                     self.assertEqual(info['commit'], SHA)
                     self.assertEqual(info['channel'], variant['channel'])
-                    self.assertEqual(info['rebuilt'], ['RyGTS.exe', 'libs/libSceVideoOut.prx', 'libs/libScePad.prx',
-                                                       'libs/libc.prx', 'libs/libkernel.prx'] + list(pkg.RUNTIME_DLLS))
+                    self.assertEqual(info['rebuilt'], ['RyGTS.exe', 'libs/libSceVideoOut.prx'] + sorted(
+                        ['libs/libScePad.prx', 'libs/libc.prx', 'libs/libkernel.prx'] +
+                        ['libs/' + name for name in pkg.RENDERER_LIBRARIES]) + list(pkg.RUNTIME_DLLS))
+                    # The renderer's libraries win over this source's own versions.
+                    self.assertEqual(pkg.pe_tables(z.read(prefix + 'libs/libSceAudio3d.prx'))[0], {'renderer_libSceAudio3d'})
+                    self.assertEqual(pkg.pe_tables(z.read(prefix + 'libs/libSceAjm.prx'))[0], {'renderer_libSceAjm'})
                     self.assertEqual(info['retained'], ['libs/libSceBluetoothHid.prx'])
                     # The rebuilt libc and MinGW runtime replace the archive's copies.
                     self.assertEqual(z.read(prefix + 'libs/libc.prx'), Path('artifacts/runtime/libc.prx').read_bytes())
@@ -336,13 +344,13 @@ class PackageTests(unittest.TestCase):
                 pkg.check_package_imports(stage)
 
     def test_stub_never_replaces_real_module(self):
-        # FEAT-GTS-260: this source builds libSceAjm.prx as a stub; the archive's is the real module.
+        # FEAT-GTS-260: this source builds libSceCamera.prx as a stub; the archive's is the real module.
         with tempfile.TemporaryDirectory() as temp, contextlib.chdir(temp):
             base = self.fixture()
             with zipfile.ZipFile(base, 'a') as z:
-                z.writestr(pkg.BASE_FOLDER + '/libs/libSceAjm.prx', linked_pe(exports=('sceAjmInitialize',)))
+                z.writestr(pkg.BASE_FOLDER + '/libs/libSceCamera.prx', linked_pe(exports=('sceCameraOpen',)))
                 z.writestr(pkg.BASE_FOLDER + '/libs/libSceAudio.prx', linked_pe(exports=('DummyFunction_nid_no_patch',)))
-            for name in ('libSceAjm.prx', 'libSceAudio.prx'):
+            for name in ('libSceCamera.prx', 'libSceAudio.prx'):
                 (Path('artifacts/runtime') / name).write_bytes(linked_pe(exports=('DummyFunction_nid_no_patch',)))
             (Path('artifacts/runtime') / 'libSceNew.prx').write_bytes(linked_pe(exports=('DummyFunction_nid_no_patch',)))
             self.rehash(Path('artifacts/runtime'))
@@ -352,9 +360,9 @@ class PackageTests(unittest.TestCase):
             prefix = archive.stem + '/'
             with zipfile.ZipFile(archive) as z:
                 info = json.loads(z.read(prefix + 'BUILD_INFO.txt'))
-                self.assertEqual(pkg.pe_tables(z.read(prefix + 'libs/libSceAjm.prx'))[0], {'sceAjmInitialize'})
-            self.assertIn('libs/libSceAjm.prx', info['retained'])
-            self.assertNotIn('libs/libSceAjm.prx', info['rebuilt'])
+                self.assertEqual(pkg.pe_tables(z.read(prefix + 'libs/libSceCamera.prx'))[0], {'sceCameraOpen'})
+            self.assertIn('libs/libSceCamera.prx', info['retained'])
+            self.assertNotIn('libs/libSceCamera.prx', info['rebuilt'])
             self.assertIn('libs/libSceAudio.prx', info['rebuilt'])  # a stub may replace a stub
             self.assertIn('libs/libSceNew.prx', info['rebuilt'])    # and add a module the archive lacks
 

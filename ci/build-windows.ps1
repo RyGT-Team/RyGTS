@@ -121,7 +121,16 @@ int rygt_ndebug_probe(void) { return 0; }
         Invoke-Checked 'clang-cl' (@('/nologo','/c','/O2','/Ob2','/Zi') + $probeFlags + @($probe,"/Fo$object"))
     }
     if (!(Select-String -LiteralPath "$source/Build/ci/CMakeCache.txt" -Pattern '^ENABLE_DISCORD_RPC:BOOL=ON$' -Quiet)) { throw 'Discord RPC was not enabled in renderer configuration' }
-    Invoke-Checked 'cmake' @('--build',"$source/Build/ci",'--target','ryty_gpu','--parallel','2')
+    # FIX-GTS-262: the renderer repository also implements these runtime libraries (as ryGT7's CI
+    # builds them); they replace both the archive's and this source's own versions in the package.
+    $rendererLibraries = [ordered]@{ ryty_ajm='libSceAjm.prx'; ryty_ngs2='libSceNgs2.prx'; ryty_audio3d='libSceAudio3d.prx';
+        ryty_zlib='libSceZlib.prx'; ryty_discmap='libSceDiscMap.prx'; ryty_screenshot='libSceScreenShot.prx'; ryty_np='libSceNpAuth.prx' }
+    Invoke-Checked 'cmake' (@('--build',"$source/Build/ci",'--target','ryty_gpu') + @($rendererLibraries.Keys) + @('--parallel','2'))
+    foreach ($library in $rendererLibraries.Values) {
+        $built = @(Get-ChildItem "$source/Build/ci" -Recurse -Filter $library)
+        if ($built.Count -ne 1) { throw "Expected exactly one renderer-built $library (found $($built.Count))" }
+        Copy-Item $built[0].FullName $out
+    }
     $binary = Get-ChildItem "$source/Build/ci" -Recurse -Filter libSceVideoOut.prx
     if (@($binary).Count -ne 1) { throw 'Expected exactly one renderer output' }
     Copy-Item $binary.FullName $out

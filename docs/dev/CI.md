@@ -56,11 +56,12 @@ and SHA-256, unpacked by `ci/runtime_toolchain.py`. They replace the base archiv
 copies, together with that toolchain's `libgcc_s_seh-1.dll`, `libstdc++-6.dll` and
 `libwinpthread-1.dll`. That includes the placeholder libraries for PS4 libraries the
 game loads but RyGTS does not implement (NP dialogs, USB, VR, `libSceGnmDriver.prx`,
-...), generated from the export lists in `core/libs/placeholders`. Only the renderer
-repository's own libraries (`libSceAjm.prx`, `libSceNgs2.prx`, `libSceZlib.prx`,
-`libSceDiscMap.prx`, `libSceScreenShot.prx`), the Windows converter and other helpers
-still come from the immutable October 25 redistributable archive pinned by SHA-256 in
-`ci/package.py`. Packaging fails when a
+...), generated from the export lists in `core/libs/placeholders`. The renderer step
+also builds the runtime libraries the renderer repository implements (`libSceAjm`,
+`libSceNgs2`, `libSceAudio3d`, `libSceZlib`, `libSceDiscMap`, `libSceScreenShot`,
+`libSceNpAuth`); they are packaged last, over this source's own smaller versions.
+The Windows converter and other helpers still come from the immutable October 25
+redistributable archive pinned by SHA-256 in `ci/package.py`. Packaging fails when a
 packaged module imports a function another packaged module does not export, so a
 library that no longer matches the rebuilt `libc`/`libkernel` cannot ship.
 BUILD_INFO.txt records exactly what was rebuilt and what was retained.
