@@ -1547,7 +1547,7 @@ namespace RyGT
         public string Game = "", Update = "", Modules = "", Fonts = "";
         public string StdoutLevel = "Warning";
         public bool HddStreaming = false;
-        public bool ShowAdvanced = true; // FEAT-GTS-438: the Advanced tab and its quick access entry
+        public bool ShowAdvanced = false; // FEAT-GTS-438: the Advanced page; FEAT-GTS-266: hidden by default
         public bool PromptObsolete = true; // FEAT-GTS-469: offer to remove obsolete config entries
         public List<EnvVar> Env = new List<EnvVar>(); // FEAT-GTS-433
         readonly string path;
@@ -1573,7 +1573,7 @@ namespace RyGT
                 else if (key == "fonts") Fonts = value;
                 else if (key == "stdout_level") StdoutLevel = LogFiles.Levels[LogFiles.LevelIndex(value)];
                 else if (key == "hdd_streaming") HddStreaming = value == "1" || value.Equals("true", StringComparison.OrdinalIgnoreCase);
-                else if (key == "show_advanced") ShowAdvanced = !(value == "0" || value.Equals("false", StringComparison.OrdinalIgnoreCase));
+                else if (key == "show_advanced") ShowAdvanced = value == "1" || value.Equals("true", StringComparison.OrdinalIgnoreCase);
                 else if (key == "prompt_obsolete") PromptObsolete = !(value == "0" || value.Equals("false", StringComparison.OrdinalIgnoreCase));
             }
         }
