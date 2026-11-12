@@ -54,10 +54,13 @@ The runtime libraries (`libs/*.prx`, except the renderer's) are built by
 `ci/runtime-toolchain.json`: every MSYS2 package and the FFmpeg prebuilt by file name
 and SHA-256, unpacked by `ci/runtime_toolchain.py`. They replace the base archive's
 copies, together with that toolchain's `libgcc_s_seh-1.dll`, `libstdc++-6.dll` and
-`libwinpthread-1.dll`. Libraries this source does not build (firmware conversions
-such as `libSceAjm.prx` and `libSceNgs2.prx`, NP dialogs, `libSceGnmDriver.prx`, ...),
-the Windows converter and other helpers still come from the immutable October 25
-redistributable archive pinned by SHA-256 in `ci/package.py`. Packaging fails when a
+`libwinpthread-1.dll`. That includes the placeholder libraries for PS4 libraries the
+game loads but RyGTS does not implement (NP dialogs, USB, VR, `libSceGnmDriver.prx`,
+...), generated from the export lists in `core/libs/placeholders`. Only the renderer
+repository's own libraries (`libSceAjm.prx`, `libSceNgs2.prx`, `libSceZlib.prx`,
+`libSceDiscMap.prx`, `libSceScreenShot.prx`), the Windows converter and other helpers
+still come from the immutable October 25 redistributable archive pinned by SHA-256 in
+`ci/package.py`. Packaging fails when a
 packaged module imports a function another packaged module does not export, so a
 library that no longer matches the rebuilt `libc`/`libkernel` cannot ship.
 BUILD_INFO.txt records exactly what was rebuilt and what was retained.
