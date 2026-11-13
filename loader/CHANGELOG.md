@@ -6,6 +6,12 @@ The version lives in `loader/Version.cs`. To release a change, bump
 `LauncherVersion.Value` there and add a section here with the same number;
 CI fails when the two disagree.
 
+## 0.1.2 - 2026-11-12
+
+* FEAT-GTS-266: The Advanced page (the renderer's experimental switches) is hidden by default. It
+  appears once "Show the Advanced page" is turned on under Logging (`show_advanced=1` in `RyGT.ini`);
+  switches set there keep applying when it is hidden again.
+
 ## 0.1.1 - 2026-11-12
 
 * New launcher look, ported from ryGT7's launcher: a full-window home view with the
