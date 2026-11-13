@@ -47,7 +47,7 @@ private:
 };
 
 // PERF-GTS-268: whether one registered guest allocation holds all of [addr, addr + len), so a
-// fixed direct map of it is remapped in place (RYGT_BATCH_MAP_MERGE=0: always false).
+// fixed direct map of it is remapped in place (only with RYGT_BATCH_MAP_MERGE=1).
 bool FixedRangeInOneAllocation(const void* addr, size_t len);
 
 #endif

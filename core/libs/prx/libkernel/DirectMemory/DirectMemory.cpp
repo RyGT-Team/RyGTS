@@ -556,8 +556,11 @@ std::atomic<std::uint64_t> g_runMaps{0};
 
 bool BatchMapMerge() {
     static const bool on = [] {
+        // Off unless set to 1: with it on, an Autopolis race had recorder stalls of 30 to 80 ms
+        // about twice a second (the renderer's work for a whole run at once), and no entries
+        // merged (GT Sport's entries do not follow each other in direct memory).
         const char* env = std::getenv("RYGT_BATCH_MAP_MERGE");
-        return !(env && env[0] == '0');
+        return env && env[0] == '1';
     }();
     return on;
 }
