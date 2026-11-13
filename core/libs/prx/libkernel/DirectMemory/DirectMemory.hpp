@@ -42,6 +42,12 @@ public:
 
 private:
     std::lock_guard<std::recursive_mutex> transition;
+    void* start;
+    size_t bytes;
 };
+
+// PERF-GTS-268: whether one registered guest allocation holds all of [addr, addr + len), so a
+// fixed direct map of it is remapped in place (RYGT_BATCH_MAP_MERGE=0: always false).
+bool FixedRangeInOneAllocation(const void* addr, size_t len);
 
 #endif

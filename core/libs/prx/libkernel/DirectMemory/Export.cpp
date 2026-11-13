@@ -464,7 +464,23 @@ int APS5_VABI sceKernelBatchMap2(KernelBatchMapEntry* entries, int num_entries, 
      noticeEnd = run;
     }
    }
-   result = DoMapDirect(&entry.start, entry.length, static_cast<uint8_t>(entry.protection), flags, static_cast<int64_t>(entry.offset), 0);
+   {
+    // PERF-GTS-268: entries of the run that follow each other in direct memory too, with one
+    // protection, are mapped as one range when one registered allocation holds it all (the
+    // remap-in-place path). Each entry cost its own unmap, map and protect calls in Windows:
+    // a streaming batch kept a job thread in here for 10 to 26 ms at Autopolis, and the game
+    // submitted its frame 3 to 5 ms after it returned.
+    std::size_t length = entry.length;
+    int last = processed;
+    while (notice && last + 1 < noticeEnd && entries[last + 1].protection == entry.protection &&
+           entries[last + 1].offset == entry.offset + length &&
+           FixedRangeInOneAllocation(entry.start, length + entries[last + 1].length)) {
+     length += entries[last + 1].length;
+     ++last;
+    }
+    result = DoMapDirect(&entry.start, length, static_cast<uint8_t>(entry.protection), flags, static_cast<int64_t>(entry.offset), 0);
+    if (result == 0) processed = last;
+   }
    break;
   case OpUnmap:
    result = sceKernelMunmap(reinterpret_cast<uint64_t>(entry.start), entry.length);

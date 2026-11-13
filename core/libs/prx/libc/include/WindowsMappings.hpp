@@ -475,6 +475,26 @@ private:
         requireOwned(address, bytes);
         const auto end = address + bytes;
         forgetClean(address, end);
+        // PERF-GTS-268: the two cases a streaming remap meets nearly every time need none of the
+        // walk below (a dozen VirtualQuery calls): the range is one free placeholder already, or
+        // it is exactly one view with one protection, which unmaps into that placeholder.
+        {
+            const auto memory = query(address);
+            if (reinterpret_cast<std::uintptr_t>(memory.AllocationBase) == address && memory.RegionSize == bytes) {
+                if (memory.State == MEM_RESERVE) return;
+                if (memory.State == MEM_COMMIT && memory.Type == MEM_MAPPED && query(end).AllocationBase != memory.AllocationBase) {
+                    if (!unmap(GetCurrentProcess(), reinterpret_cast<void*>(address), MEM_PRESERVE_PLACEHOLDER)) fail("unmap shared guest view");
+                    for (auto page = address; page < end; page += pageBytes) {
+                        const auto found = views.find(page);
+                        if (found != views.end()) {
+                            std::erase(found->second.page->aliases, page);
+                            views.erase(found);
+                        }
+                    }
+                    return;
+                }
+            }
+        }
         for (auto cursor = address; cursor < end;) {
             const auto memory = query(cursor);
             if (memory.State == MEM_RESERVE) {
