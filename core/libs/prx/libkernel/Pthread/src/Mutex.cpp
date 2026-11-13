@@ -6,6 +6,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -17,6 +18,30 @@ constexpr int sceDeadlock = static_cast<int>(0x8002000bu);
 constexpr int sceBusy = static_cast<int>(0x80020010u);
 constexpr int sceTimedOut = static_cast<int>(0x8002003cu);
 std::mutex initializationMutex;
+
+// PERF-GTS-269 (RYGT_MUTEX_SPIN=<tries>, default 64, 0 = off): a lock that is held is tried a
+// few more times before the thread blocks. The host mutex blocks in the kernel at once and its
+// unlock then has to wake the waiter there; GT Sport's twelve job threads share short locks, and
+// at the Autopolis race start they spent 13 to 29 ms a frame in scePthreadMutexLock.
+int MutexSpinTries() {
+    static const int tries = [] {
+        const char* env = std::getenv("RYGT_MUTEX_SPIN");
+        if (!env || !*env) return 64;
+        const long value = std::strtol(env, nullptr, 10);
+        return static_cast<int>(value < 0 ? 0 : value > 4096 ? 4096 : value);
+    }();
+    return tries;
+}
+
+template<typename TNative>
+bool SpinAcquire(TNative& native) {
+    const int tries = MutexSpinTries();
+    for (int i = 0; i < tries; ++i) {
+        if (native.try_lock()) return true;
+        for (int pause = 0; pause < 16; ++pause) __builtin_ia32_pause();
+    }
+    return false;
+}
 
 PthreadMutex destroyedMutex() {
     return reinterpret_cast<PthreadMutex>(std::uintptr_t{2});
@@ -166,7 +191,10 @@ int APS5_VABI scePthreadMutexDestroy(PthreadMutex* mutex) {
 int APS5_VABI scePthreadMutexLock(PthreadMutex* mutex) {
     auto* resolved = resolveMutex(mutex, true);
     if (!resolved) return SCE_KERNEL_ERROR_EINVAL;
-    return acquireMutex(resolved, [](auto& native) { native.lock(); return true; }, 0, false);
+    return acquireMutex(resolved, [](auto& native) {
+        if (!SpinAcquire(native)) native.lock();
+        return true;
+    }, 0, false);
 }
 
 int APS5_VABI scePthreadMutexUnlock(PthreadMutex* mutex) {
