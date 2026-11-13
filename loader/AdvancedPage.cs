@@ -54,9 +54,57 @@ namespace RyGT
 
         public static List<RendererSwitch> Walk(string path)
         {
-            byte[] data = File.ReadAllBytes(path);
             var names = new HashSet<string>(StringComparer.Ordinal);
             var described = new Dictionary<string, RendererSwitch>(StringComparer.Ordinal);
+            Scan(File.ReadAllBytes(path), names, described);
+            return Catalog(names, described);
+        }
+
+        /// FEAT-GTS-271: the renderer and the runtime modules: every libs\*.prx. The runtime's switches
+        /// (libkernel, libc, libSceAvPlayer, libSceUserService, ...) are listed with the renderer's;
+        /// their descriptions may come from any of these files (shadGT's table describes them).
+        /// A file that cannot be read is skipped; the renderer itself must be readable.
+        public static List<RendererSwitch> WalkAll(string root)
+        {
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            var described = new Dictionary<string, RendererSwitch>(StringComparer.Ordinal);
+            string renderer = Path.Combine(root, RendererFile);
+            Scan(File.ReadAllBytes(renderer), names, described);
+            string libs = Path.GetDirectoryName(renderer);
+            string[] modules = new string[0];
+            try { modules = Directory.GetFiles(libs, "*.prx"); }
+            catch { }
+            foreach (var module in modules)
+            {
+                if (string.Equals(Path.GetFullPath(module), Path.GetFullPath(renderer), StringComparison.OrdinalIgnoreCase)) continue;
+                try { Scan(File.ReadAllBytes(module), names, described); }
+                catch { }
+            }
+            return Catalog(names, described);
+        }
+
+        /// The names in one file: ASCII strings, and UTF-16 ones (_wgetenv(L"RYGT_...")); and the
+        /// description strings (ASCII).
+        static void Scan(byte[] data, HashSet<string> names, Dictionary<string, RendererSwitch> described)
+        {
+            for (int i = 0; i + 13 < data.Length; ++i)
+            {
+                if ((data[i] != (byte)'R' && data[i] != (byte)'S') || data[i + 1] != 0) continue;
+                if (i >= 2 && data[i - 1] == 0 && IsNameByte(data[i - 2])) continue;
+                // UTF-16LE: R\0Y\0G\0T\0_\0 or S\0H\0A\0D\0G\0T\0_\0, ended by \0\0.
+                var text = new StringBuilder();
+                int j = i;
+                while (j + 1 < data.Length && text.Length < 128 && data[j + 1] == 0 && data[j] != 0)
+                {
+                    text.Append((char)data[j]);
+                    j += 2;
+                }
+                if (j + 1 < data.Length && data[j] == 0 && data[j + 1] == 0 && IsSwitchName(text.ToString()))
+                {
+                    names.Add(text.ToString());
+                    i = j + 1;
+                }
+            }
             for (int i = 0; i + 5 < data.Length; ++i)
             {
                 // Strings may follow other data directly (the compiler packs them), so only a name
@@ -77,6 +125,10 @@ namespace RyGT
                     names.Add(text);
             }
 
+        }
+
+        static List<RendererSwitch> Catalog(HashSet<string> names, Dictionary<string, RendererSwitch> described)
+        {
             var list = new List<RendererSwitch>();
             // Only names the renderer really reads: a description alone (e.g. for a switch that only a
             // diagnostics build reads) adds nothing.
@@ -295,7 +347,7 @@ namespace RyGT
             Action<List<EnvVar>> keep = list => { savedEnv = list; save(list); };
             List<RendererSwitch> catalog;
             string walkError = null;
-            try { catalog = SwitchWalker.Walk(rendererPath); }
+            try { catalog = SwitchWalker.WalkAll(root); } // FEAT-GTS-271: the runtime modules too
             catch (Exception e) { catalog = new List<RendererSwitch>(); walkError = e.Message; }
             var known = new HashSet<string>(catalog.Select(s => s.Name));
             string rendererDate = "";

@@ -8,6 +8,12 @@ CI fails when the two disagree.
 
 ## 0.1.3 - 2026-11-13
 
+* FEAT-GTS-271: The Advanced page also lists the runtime's switches (libkernel, libc,
+  libSceAvPlayer, libSceUserService, libSceNpAuth, ...): it reads every `libs\*.prx`, not only the
+  renderer, including names the runtime reads as UTF-16 (`RYGT_USER_NAME`, `RYGT_APP0_LAYERS`).
+  Their descriptions come from shadGT's table like the renderer's. The page is built the first
+  time it is opened, so the launcher starts as fast as before.
+
 * FEAT-GTS-270: Profiles on the Advanced page. A dropdown of saved profiles with Save and Load
   next to it: Save keeps the current switches and other variables under a name
   (`launcher\profiles\<name>.ini`, the same `env=` lines as `RyGT.ini`), Load replaces them with a
