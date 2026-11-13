@@ -20,7 +20,7 @@ constexpr int sceBusy = static_cast<int>(0x80020010u);
 constexpr int sceTimedOut = static_cast<int>(0x8002003cu);
 std::mutex initializationMutex;
 
-// PERF-GTS-269 (RYGT_MUTEX_SPIN=<tries>, default 0 = off): a mutex that is held is tried that
+// PERF-GTS-269 (RYGT_MUTEX_SPIN=<tries>, default 40, 0 = off): a mutex that is held is tried that
 // many more times, a pause apart, before the thread blocks (the PS4's library does this for
 // its adaptive type, 4, which is also recorded here). The host mutex blocks in the
 // kernel at once and its unlock then wakes the waiter there. In GT Sport's heavy frames at
@@ -30,7 +30,7 @@ std::mutex initializationMutex;
 int MutexSpinTries() {
     static const int tries = [] {
         const char* env = std::getenv("RYGT_MUTEX_SPIN");
-        if (!env || !*env) return 0;
+        if (!env || !*env) return 40; // a race with 40: 99% of held locks got without sleeping
         const long value = std::strtol(env, nullptr, 10);
         return static_cast<int>(value < 0 ? 0 : value > 20000 ? 20000 : value);
     }();
