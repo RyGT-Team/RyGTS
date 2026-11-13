@@ -20,9 +20,9 @@ constexpr int sceBusy = static_cast<int>(0x80020010u);
 constexpr int sceTimedOut = static_cast<int>(0x8002003cu);
 std::mutex initializationMutex;
 
-// PERF-GTS-269 (RYGT_MUTEX_SPIN=<tries>, default 0 = off): an adaptive mutex (type 4, which the
-// PS4's library spins on before it sleeps; here it was an ordinary one) that is held is tried
-// that many more times, a pause apart, before the thread blocks. The host mutex blocks in the
+// PERF-GTS-269 (RYGT_MUTEX_SPIN=<tries>, default 0 = off): a mutex that is held is tried that
+// many more times, a pause apart, before the thread blocks (the PS4's library does this for
+// its adaptive type, 4, which is also recorded here). The host mutex blocks in the
 // kernel at once and its unlock then wakes the waiter there. In GT Sport's heavy frames at
 // Autopolis (100 to 290 ms of job-thread CPU in one frame against 25) 70% of the job threads'
 // time was NtWaitForSingleObject and NtSetEvent under these calls. The PS4's library tries
@@ -54,9 +54,9 @@ void ReportMutexes() {
         v[i * 3 + 1] = g_held[i].exchange(0, std::memory_order_relaxed);
         v[i * 3 + 2] = g_spun[i].exchange(0, std::memory_order_relaxed);
     }
-    std::fprintf(stderr, "[pthread] PERF-GTS-269 mutex locks in 10 s: adaptive %llu (%llu held, %llu got by trying again), other %llu (%llu held); %d tries\n",
-                 static_cast<unsigned long long>(v[3]), static_cast<unsigned long long>(v[4]), static_cast<unsigned long long>(v[5]),
-                 static_cast<unsigned long long>(v[0]), static_cast<unsigned long long>(v[1]), MutexSpinTries());
+    std::fprintf(stderr, "[pthread] PERF-GTS-269 mutex locks in 10 s: %llu (%llu held, %llu got by trying again), adaptive ones %llu (%llu held, %llu); %d tries\n",
+                 static_cast<unsigned long long>(v[0]), static_cast<unsigned long long>(v[1]), static_cast<unsigned long long>(v[2]),
+                 static_cast<unsigned long long>(v[3]), static_cast<unsigned long long>(v[4]), static_cast<unsigned long long>(v[5]), MutexSpinTries());
 }
 
 template<typename TNative>
@@ -65,14 +65,15 @@ void LockCounted(TNative& native, bool adaptive) {
     g_locks[kind].fetch_add(1, std::memory_order_relaxed);
     if (native.try_lock()) return;
     g_held[kind].fetch_add(1, std::memory_order_relaxed);
-    if (adaptive) {
-        const int tries = MutexSpinTries();
-        for (int i = 0; i < tries; ++i) {
-            __builtin_ia32_pause();
-            if (native.try_lock()) {
-                g_spun[kind].fetch_add(1, std::memory_order_relaxed);
-                return;
-            }
+    // Every mutex: GT Sport creates none as adaptive (a race: 6 to 8 million locks in 10 s on
+    // ordinary ones, 1.6 to 2.3 million of them found held). The tries must stay few: at 200,000
+    // held locks a second, 64 tries of 16 pauses each used up the cores the renderer runs on.
+    const int tries = MutexSpinTries();
+    for (int i = 0; i < tries; ++i) {
+        __builtin_ia32_pause();
+        if (native.try_lock()) {
+            g_spun[kind].fetch_add(1, std::memory_order_relaxed);
+            return;
         }
     }
     ReportMutexes();
