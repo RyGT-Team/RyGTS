@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <memory>
 #include <limits>
 #include <stdexcept>
@@ -539,6 +540,50 @@ void NotifyRenderer(const char* name, const void* addr, size_t len) {
 // Guest registry and alias operations must never acquire this mutex.
 std::recursive_mutex g_mappingTransitionMutex;
 
+namespace {
+// PERF-GTS-265: the range a FixedReplacementNotice on this thread already told the renderer about.
+thread_local std::uintptr_t g_noticeStart = 0;
+thread_local std::uintptr_t g_noticeEnd = 0;
+
+bool AlreadyNoticed(const void* addr, size_t len) {
+    const auto start = reinterpret_cast<std::uintptr_t>(addr);
+    return g_noticeStart < g_noticeEnd && start >= g_noticeStart && len <= g_noticeEnd - start;
+}
+
+// Every 10 s on stderr: how many fixed batch maps the renderer heard about one by one or as runs.
+void CountBatchNotice(std::size_t entries) {
+    static std::mutex lock;
+    static std::uint64_t windowStart = 0, runs = 0, merged = 0;
+    std::lock_guard guard(lock);
+    ++runs;
+    merged += entries;
+#ifdef _WIN32
+    const std::uint64_t now = GetTickCount64();
+#else
+    const std::uint64_t now = static_cast<std::uint64_t>(std::time(nullptr)) * 1000;
+#endif
+    if (windowStart == 0) windowStart = now;
+    if (now - windowStart >= 10000) {
+        std::fprintf(stderr, "[memory] PERF-GTS-265: fixed batch maps in %.1f s: %llu entries, %llu renderer notices\n",
+                     (now - windowStart) / 1000.0, static_cast<unsigned long long>(merged), static_cast<unsigned long long>(runs));
+        windowStart = now;
+        runs = merged = 0;
+    }
+}
+}
+
+FixedReplacementNotice::FixedReplacementNotice(void* addr, size_t len, std::size_t entries) : transition(g_mappingTransitionMutex) {
+    CountBatchNotice(entries);
+    if (addr == nullptr || len == 0) return;
+    NotifyRenderer("RytyGpuUnmapMemory", addr, len);
+    g_noticeStart = reinterpret_cast<std::uintptr_t>(addr);
+    g_noticeEnd = g_noticeStart + len;
+}
+
+FixedReplacementNotice::~FixedReplacementNotice() {
+    g_noticeStart = g_noticeEnd = 0;
+}
+
 // MAP_FIXED without MAP_NO_OVERWRITE replaces whatever is mapped there (PS4 titles rely on it,
 // e.g. GT Sport remaps a larger block over an existing one). A range wholly inside one registered
 // allocation is remapped in place by RemapFixedIntoRegistered; any other overlap is unmapped first.
@@ -563,7 +608,7 @@ int DoMapDirect(void** addr, size_t len, int prot, int flags, int64_t physStart,
         return SCE_KERNEL_ERROR_EINVAL;
     }
     std::lock_guard transition(g_mappingTransitionMutex);
-    if (*addr != nullptr && (flags & GuestMapFixedFlag) != 0) NotifyRenderer("RytyGpuUnmapMemory", *addr, len);
+    if (*addr != nullptr && (flags & GuestMapFixedFlag) != 0 && !AlreadyNoticed(*addr, len)) NotifyRenderer("RytyGpuUnmapMemory", *addr, len);
     ReleaseFixedOverlap(*addr, len, flags);
     const int result = [&]() {
         GuestAllocations::Mutation mutation;

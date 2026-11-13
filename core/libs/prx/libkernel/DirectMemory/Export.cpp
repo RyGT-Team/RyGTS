@@ -22,7 +22,9 @@
 #include <stdexcept>
 #include <string>
 #include <iterator>
+#include <limits>
 #include <map>
+#include <memory>
 #include <cstdio>
 #include <mutex>
 
@@ -434,12 +436,34 @@ int APS5_VABI sceKernelBatchMap2(KernelBatchMapEntry* entries, int num_entries, 
  constexpr int OpProtect = 2;
  constexpr int OpMapFlexible = 3;
  constexpr int OpTypeProtect = 4;
+ constexpr int MapFixed = 0x10;
  int processed = 0;
  int result = 0;
+ // PERF-GTS-265: each fixed direct map tells the renderer first that the range is replaced, and
+ // the renderer waits for its GPU thread to drop what it holds there. GT Sport streams Autopolis
+ // with batches of thousands of such entries; one wait each stopped the game for 250 ms
+ // (Nsight Systems trace). A run of adjacent fixed direct maps now tells it once.
+ std::unique_ptr<FixedReplacementNotice> notice;
+ int noticeEnd = 0;
  for (; processed < num_entries; ++processed) {
   auto& entry = entries[processed];
+  if (processed >= noticeEnd) notice.reset();
   switch (entry.operation) {
   case OpMapDirect:
+   if (!notice && entry.start != nullptr && (flags & MapFixed) != 0) {
+    auto* runStart = static_cast<char*>(entry.start);
+    std::size_t runBytes = 0;
+    int run = processed;
+    while (run < num_entries && entries[run].operation == OpMapDirect && static_cast<char*>(entries[run].start) == runStart + runBytes &&
+           entries[run].length != 0 && entries[run].length <= std::numeric_limits<std::uintptr_t>::max() - reinterpret_cast<std::uintptr_t>(runStart) - runBytes) {
+     runBytes += entries[run].length;
+     ++run;
+    }
+    if (run > processed) {
+     notice = std::make_unique<FixedReplacementNotice>(runStart, runBytes, static_cast<std::size_t>(run - processed));
+     noticeEnd = run;
+    }
+   }
    result = DoMapDirect(&entry.start, entry.length, static_cast<uint8_t>(entry.protection), flags, static_cast<int64_t>(entry.offset), 0);
    break;
   case OpUnmap:

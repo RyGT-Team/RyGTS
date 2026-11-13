@@ -122,35 +122,43 @@ public:
         HANDLE duplicate = nullptr;
         if (!DuplicateHandle(GetCurrentProcess(), section, GetCurrentProcess(), &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS)) fail("keep shared guest section");
         const auto owned = std::make_shared<Section>(duplicate);
-        // RyGT: the whole range as one view (one placeholder replaced, one protection call). Mapping
-        // 16 KB at a time took five or six Windows calls per page, and GT Sport maps hundreds of MB
-        // while it streams a track: up to seconds of stalls on Nurburgring 24h. reset() splits a
-        // view again when only part of it is released or remapped later.
-        bool whole = false;
-        if (bytes > pageBytes) {
-            split(cursor, bytes);
-            whole = map(section, GetCurrentProcess(), address, offset, bytes, MEM_REPLACE_PLACEHOLDER, PAGE_EXECUTE_READWRITE, nullptr, 0) != nullptr;
-            DWORD previous;
-            if (whole && !VirtualProtect(address, bytes, protection, &previous)) fail("protect shared guest pages");
-        }
-        for (std::size_t done = 0; done < bytes; done += pageBytes) {
-            void* page = reinterpret_cast<void*>(cursor + done);
-            if (!whole) {
-                split(cursor + done, pageBytes);
-                if (!map(section, GetCurrentProcess(), page, offset + done, pageBytes, MEM_REPLACE_PLACEHOLDER, PAGE_EXECUTE_READWRITE, nullptr, 0)) fail("map shared guest page");
+        // RyGT: views of many pages at once (one placeholder replaced, one protection call each).
+        // Mapping 16 KB at a time took five or six Windows calls per page, and GT Sport maps
+        // hundreds of MB while it streams a track: up to seconds of stalls on Nurburgring 24h.
+        // PERF-GTS-264: at most viewBytes per view, not the whole range as one. reset() splits a
+        // view again when only part of it is released or remapped later (splitView), and that
+        // remaps the rest of the view under the mutex every thread touching shared memory needs.
+        // GT Sport unmaps parts of these ranges while it streams Autopolis: splitting one large
+        // view stopped the game and the renderer for 500-600 ms.
+        for (std::size_t viewDone = 0; viewDone < bytes; viewDone += viewBytes) {
+            const auto viewSize = std::min(viewBytes, bytes - viewDone);
+            const auto viewStart = cursor + viewDone;
+            bool whole = false;
+            if (viewSize > pageBytes) {
+                split(viewStart, viewSize);
+                whole = map(section, GetCurrentProcess(), reinterpret_cast<void*>(viewStart), offset + viewDone, viewSize, MEM_REPLACE_PLACEHOLDER, PAGE_EXECUTE_READWRITE, nullptr, 0) != nullptr;
                 DWORD previous;
-                if (!VirtualProtect(page, pageBytes, protection, &previous)) fail("protect shared guest page");
+                if (whole && !VirtualProtect(reinterpret_cast<void*>(viewStart), viewSize, protection, &previous)) fail("protect shared guest pages");
             }
-            const auto key = std::make_pair(reinterpret_cast<std::uintptr_t>(section), offset + done);
-            auto shared = physical[key].lock();
-            if (!shared) {
-                shared = std::make_shared<SharedPage>();
-                physical[key] = shared;
+            for (std::size_t done = viewDone; done < viewDone + viewSize; done += pageBytes) {
+                void* page = reinterpret_cast<void*>(cursor + done);
+                if (!whole) {
+                    split(cursor + done, pageBytes);
+                    if (!map(section, GetCurrentProcess(), page, offset + done, pageBytes, MEM_REPLACE_PLACEHOLDER, PAGE_EXECUTE_READWRITE, nullptr, 0)) fail("map shared guest page");
+                    DWORD previous;
+                    if (!VirtualProtect(page, pageBytes, protection, &previous)) fail("protect shared guest page");
+                }
+                const auto key = std::make_pair(reinterpret_cast<std::uintptr_t>(section), offset + done);
+                auto shared = physical[key].lock();
+                if (!shared) {
+                    shared = std::make_shared<SharedPage>();
+                    physical[key] = shared;
+                }
+                const auto base = cursor + done;
+                shared->aliases.push_back(base);
+                views.emplace(base, View{shared, protection, 0, false, owned, offset + done});
+                invalidate(*shared);
             }
-            const auto base = cursor + done;
-            shared->aliases.push_back(base);
-            views.emplace(base, View{shared, protection, 0, false, owned, offset + done});
-            invalidate(*shared);
         }
     }
 
@@ -302,6 +310,8 @@ public:
 
 private:
     static constexpr std::size_t pageBytes = 0x4000;
+    // PERF-GTS-264: the most one shared view maps (Map); splitting a view remaps up to this much.
+    static constexpr std::size_t viewBytes = 0x200000;
     struct SharedPage {
         std::uint64_t generation = 1;
         std::vector<std::uintptr_t> aliases;

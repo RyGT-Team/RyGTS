@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <mutex>
 
 #include "prx/libkernel/KernelErrors.hpp"
 
@@ -28,5 +29,19 @@ int DoMprotect(const void* addr, size_t len, int prot);
 int DoMunmap(void* addr, size_t len);
 int DoReserveVirtual(void** addr, size_t len, int flags, size_t alignment);
 bool GuestProtection(uintptr_t addr, int* prot);
+
+// PERF-GTS-265: tells the renderer once that a run of adjacent fixed direct maps replaces
+// [addr, addr + len), and holds the mapping transition while the run is mapped; DoMapDirect on
+// this thread does not tell it again for each piece inside the range.
+class FixedReplacementNotice {
+public:
+    FixedReplacementNotice(void* addr, size_t len, std::size_t entries);
+    ~FixedReplacementNotice();
+    FixedReplacementNotice(const FixedReplacementNotice&) = delete;
+    FixedReplacementNotice& operator=(const FixedReplacementNotice&) = delete;
+
+private:
+    std::lock_guard<std::recursive_mutex> transition;
+};
 
 #endif
