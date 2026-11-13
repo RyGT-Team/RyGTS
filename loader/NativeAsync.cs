@@ -1,5 +1,5 @@
 // FEAT-GTS-267: "Native renderer async (experimental)" on the Graphics page: the native renderer
-// started with the renderer switches of shadGT's PERF-GTS-368 to 403 (work moved off the recorder
+// started with the renderer switches of shadGT's PERF-GTS-368 to 405 (work moved off the recorder
 // thread or made cheaper on it, all off by default in the renderer), with the values they were
 // tested with together in races at Autopolis and Tokyo.
 using System.Diagnostics;
@@ -23,6 +23,8 @@ namespace RyGT
             { "RYGT_MIRROR_DROP_BACKOFF", "1" },    // PERF-GTS-386: rewritten vertex memory read in place longer
             { "RYGT_MIRROR_ROUND_MB", "4" },        // PERF-GTS-388: vertex mirrors widened to 4 MB
             { "RYGT_PREPARE_MISSING_PICTURES", "1" }, // PERF-GTS-403: a prepared draw kept when a texture is new
+            { "RYGT_PREPARED_EVICT_EXACT", "1" },   // PERF-GTS-404: redone only for a texture it used
+            { "RYGT_PREPARED_MIRROR_EXACT", "1" },  // PERF-GTS-405: redone only for a vertex copy it used
         };
 
         /// Sets the switches the environment does not already set (a script's own value is kept; the

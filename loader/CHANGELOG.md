@@ -9,14 +9,15 @@ CI fails when the two disagree.
 ## 0.1.3 - 2026-11-13
 
 * FEAT-GTS-267: The Renderer list on the Graphics page has a third entry, "Native renderer async
-  (experimental)": the native renderer started with the switches of shadGT's PERF-GTS-368 to 403
+  (experimental)": the native renderer started with the switches of shadGT's PERF-GTS-368 to 405
   (work moved off the recorder thread or made cheaper on it) at the values tested in races:
   `RYGT_DIRECT_NESTED_RESUME=1`, `RYGT_DYNAMIC_BUFFER_OFFSETS=1`, `RYGT_LONG_LIVED_SETS=1`,
   `RYGT_AHEAD_UPLOAD_MB=128`, `RYGT_NATIVE_CHUNK_MB=64`, `RYGT_NATIVE_UPLOAD_VRAM=1`,
   `RYGT_DRIVER_CACHE_MAX_MB=4096`, `RYGT_UPLOAD_ONCE_A_FRAME=1`, `RYGT_EVICT_SCAN_SHARDS=8`,
-  `RYGT_MIRROR_DROP_BACKOFF=1`, `RYGT_MIRROR_ROUND_MB=4` and `RYGT_PREPARE_MISSING_PICTURES=1`. A
-  switch set on the Advanced page (or already in the environment) keeps its own value. Saved as
-  `native_async=1` in `RyGT.ini`.
+  `RYGT_MIRROR_DROP_BACKOFF=1`, `RYGT_MIRROR_ROUND_MB=4`, `RYGT_PREPARE_MISSING_PICTURES=1`,
+  `RYGT_PREPARED_EVICT_EXACT=1` and `RYGT_PREPARED_MIRROR_EXACT=1`. A switch set on the Advanced
+  page (or already in the environment) keeps its own value. Saved as `native_async=1` in
+  `RyGT.ini`.
 
 ## 0.1.2 - 2026-11-12
 
