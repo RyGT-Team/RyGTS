@@ -9,6 +9,7 @@
 #include <mutex>
 #include <cstdarg>
 #include <cstdio>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
@@ -550,6 +551,20 @@ bool AlreadyNoticed(const void* addr, size_t len) {
     return g_noticeStart < g_noticeEnd && start >= g_noticeStart && len <= g_noticeEnd - start;
 }
 
+// PERF-GTS-268: maps made inside noticed runs (fewer than the entries when entries were merged).
+std::atomic<std::uint64_t> g_runMaps{0};
+
+bool BatchMapMerge() {
+    static const bool on = [] {
+        // Off unless set to 1: with it on, an Autopolis race had recorder stalls of 30 to 80 ms
+        // about twice a second (the renderer's work for a whole run at once), and no entries
+        // merged (GT Sport's entries do not follow each other in direct memory).
+        const char* env = std::getenv("RYGT_BATCH_MAP_MERGE");
+        return env && env[0] == '1';
+    }();
+    return on;
+}
+
 // Every 10 s on stderr: how many fixed batch maps the renderer heard about one by one or as runs.
 void CountBatchNotice(std::size_t entries) {
     static std::mutex lock;
@@ -564,24 +579,39 @@ void CountBatchNotice(std::size_t entries) {
 #endif
     if (windowStart == 0) windowStart = now;
     if (now - windowStart >= 10000) {
-        std::fprintf(stderr, "[memory] PERF-GTS-265: fixed batch maps in %.1f s: %llu entries, %llu renderer notices\n",
-                     (now - windowStart) / 1000.0, static_cast<unsigned long long>(merged), static_cast<unsigned long long>(runs));
+        std::fprintf(stderr, "[memory] PERF-GTS-265: fixed batch maps in %.1f s: %llu entries, %llu renderer notices, %llu maps (PERF-GTS-268)\n",
+                     (now - windowStart) / 1000.0, static_cast<unsigned long long>(merged), static_cast<unsigned long long>(runs),
+                     static_cast<unsigned long long>(g_runMaps.exchange(0, std::memory_order_relaxed)));
         windowStart = now;
         runs = merged = 0;
     }
 }
 }
 
-FixedReplacementNotice::FixedReplacementNotice(void* addr, size_t len, std::size_t entries) : transition(g_mappingTransitionMutex) {
+FixedReplacementNotice::FixedReplacementNotice(void* addr, size_t len, std::size_t entries) : transition(g_mappingTransitionMutex), start(nullptr), bytes(0) {
     CountBatchNotice(entries);
     if (addr == nullptr || len == 0) return;
     NotifyRenderer("RytyGpuUnmapMemory", addr, len);
     g_noticeStart = reinterpret_cast<std::uintptr_t>(addr);
     g_noticeEnd = g_noticeStart + len;
+    start = addr;
+    bytes = len;
 }
 
+// PERF-GTS-268: the renderer hears once that the run is mapped, as it heard once that it was
+// replaced; DoMapDirect told it for each entry (a third of a streaming batch's time went to the
+// renderer's two notices, Autopolis race start). The transition is held for the whole run, so
+// nothing reads the range in between. Also sent when an entry failed: it only drops what the
+// renderer cached there.
 FixedReplacementNotice::~FixedReplacementNotice() {
     g_noticeStart = g_noticeEnd = 0;
+    if (bytes != 0 && BatchMapMerge()) NotifyRenderer("RytyGpuMapMemory", start, bytes);
+}
+
+bool FixedRangeInOneAllocation(const void* addr, size_t len) {
+    if (!BatchMapMerge()) return false;
+    GuestAllocations::Mutation mutation;
+    return mutation.Covers(addr, len);
 }
 
 // MAP_FIXED without MAP_NO_OVERWRITE replaces whatever is mapped there (PS4 titles rely on it,
@@ -633,7 +663,10 @@ int DoMapDirect(void** addr, size_t len, int prot, int flags, int64_t physStart,
         Trace("map direct %p+0x%zx phys=0x%llx prot=0x%x flags=0x%x align=0x%zx", mapped, len, static_cast<unsigned long long>(physStart), prot, flags, alignment);
         return 0;
     }();
-    if (result == 0) NotifyRenderer("RytyGpuMapMemory", *addr, len);
+    // PERF-GTS-268: inside a noticed run the renderer is told once, when the run is mapped.
+    const bool inRun = BatchMapMerge() && (flags & GuestMapFixedFlag) != 0 && AlreadyNoticed(*addr, len);
+    if (inRun) g_runMaps.fetch_add(1, std::memory_order_relaxed);
+    if (result == 0 && !inRun) NotifyRenderer("RytyGpuMapMemory", *addr, len);
     return result;
 }
 
