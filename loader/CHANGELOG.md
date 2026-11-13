@@ -6,6 +6,13 @@ The version lives in `loader/Version.cs`. To release a change, bump
 `LauncherVersion.Value` there and add a section here with the same number;
 CI fails when the two disagree.
 
+## 0.1.3 - 2026-11-13
+
+* FEAT-GTS-270: Profiles on the Advanced page. A dropdown of saved profiles with Save and Load
+  next to it: Save keeps the current switches and other variables under a name
+  (`launcher\profiles\<name>.ini`, the same `env=` lines as `RyGT.ini`), Load replaces them with a
+  profile's, to swap between configurations instead of tracking several similar switches by hand.
+
 ## 0.1.2 - 2026-11-12
 
 * FEAT-GTS-266: The Advanced page (the renderer's experimental switches) is hidden by default. It
