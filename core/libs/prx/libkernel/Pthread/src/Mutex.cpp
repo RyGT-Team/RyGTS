@@ -6,6 +6,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <limits>
 #include <memory>
@@ -19,28 +20,63 @@ constexpr int sceBusy = static_cast<int>(0x80020010u);
 constexpr int sceTimedOut = static_cast<int>(0x8002003cu);
 std::mutex initializationMutex;
 
-// PERF-GTS-269 (RYGT_MUTEX_SPIN=<tries>, default 0 = off; 64 was tried): a lock that is held is tried a
-// few more times before the thread blocks. The host mutex blocks in the kernel at once and its
-// unlock then has to wake the waiter there; GT Sport's twelve job threads share short locks, and
-// at the Autopolis race start they spent 13 to 29 ms a frame in scePthreadMutexLock.
+// PERF-GTS-269 (RYGT_MUTEX_SPIN=<tries>, default 0 = off): an adaptive mutex (type 4, which the
+// PS4's library spins on before it sleeps; here it was an ordinary one) that is held is tried
+// that many more times, a pause apart, before the thread blocks. The host mutex blocks in the
+// kernel at once and its unlock then wakes the waiter there. In GT Sport's heavy frames at
+// Autopolis (100 to 290 ms of job-thread CPU in one frame against 25) 70% of the job threads'
+// time was NtWaitForSingleObject and NtSetEvent under these calls. The PS4's library tries
+// 2000 times.
 int MutexSpinTries() {
     static const int tries = [] {
         const char* env = std::getenv("RYGT_MUTEX_SPIN");
-        if (!env || !*env) return 0; // not shown to help yet: the race start was no better with 64
+        if (!env || !*env) return 0;
         const long value = std::strtol(env, nullptr, 10);
-        return static_cast<int>(value < 0 ? 0 : value > 4096 ? 4096 : value);
+        return static_cast<int>(value < 0 ? 0 : value > 20000 ? 20000 : value);
     }();
     return tries;
 }
 
-template<typename TNative>
-bool SpinAcquire(TNative& native) {
-    const int tries = MutexSpinTries();
-    for (int i = 0; i < tries; ++i) {
-        if (native.try_lock()) return true;
-        for (int pause = 0; pause < 16; ++pause) __builtin_ia32_pause();
+// Every 10 s on stderr, for [other, adaptive] mutexes: locks, how many found the lock held, and
+// how many of those got it while trying again.
+std::atomic<std::uint64_t> g_locks[2], g_held[2], g_spun[2];
+std::atomic<std::uint64_t> g_reportAt{0};
+
+void ReportMutexes() {
+    const auto now = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+    auto due = g_reportAt.load(std::memory_order_relaxed);
+    if (now < due || !g_reportAt.compare_exchange_strong(due, now + 10000, std::memory_order_relaxed)) return;
+    if (due == 0) return;
+    std::uint64_t v[6];
+    for (int i = 0; i < 2; ++i) {
+        v[i * 3] = g_locks[i].exchange(0, std::memory_order_relaxed);
+        v[i * 3 + 1] = g_held[i].exchange(0, std::memory_order_relaxed);
+        v[i * 3 + 2] = g_spun[i].exchange(0, std::memory_order_relaxed);
     }
-    return false;
+    std::fprintf(stderr, "[pthread] PERF-GTS-269 mutex locks in 10 s: adaptive %llu (%llu held, %llu got by trying again), other %llu (%llu held); %d tries\n",
+                 static_cast<unsigned long long>(v[3]), static_cast<unsigned long long>(v[4]), static_cast<unsigned long long>(v[5]),
+                 static_cast<unsigned long long>(v[0]), static_cast<unsigned long long>(v[1]), MutexSpinTries());
+}
+
+template<typename TNative>
+void LockCounted(TNative& native, bool adaptive) {
+    const int kind = adaptive ? 1 : 0;
+    g_locks[kind].fetch_add(1, std::memory_order_relaxed);
+    if (native.try_lock()) return;
+    g_held[kind].fetch_add(1, std::memory_order_relaxed);
+    if (adaptive) {
+        const int tries = MutexSpinTries();
+        for (int i = 0; i < tries; ++i) {
+            __builtin_ia32_pause();
+            if (native.try_lock()) {
+                g_spun[kind].fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+        }
+    }
+    ReportMutexes();
+    native.lock();
 }
 
 PthreadMutex destroyedMutex() {
@@ -144,7 +180,11 @@ int APS5_VABI scePthreadMutexattrSettype(PthreadMutexattr* attr, int type) {
     case 1: (*attr)->type = MutexType::ErrorCheck; break;
     case 2: (*attr)->type = MutexType::Recursive; break;
     case 3: (*attr)->type = MutexType::Normal; break;
-    case 4: (*attr)->type = MutexType::Normal; break;
+    case 4: (*attr)->type = MutexType::Normal; break; // adaptive
+    }
+    (*attr)->adaptive = type == 4;
+    switch (type) {
+    case 1: case 2: case 3: case 4: break;
     default: throw std::invalid_argument("Invalid mutex type");
     }
     return 0;
@@ -166,8 +206,10 @@ int APS5_VABI scePthreadMutexInit(PthreadMutex* mutex, const PthreadMutexattr* a
     if (attr && !*attr)
         throw std::invalid_argument("Mutex attributes are not initialized");
     auto replacement = std::make_unique<PthreadMutexPrivate>();
-    if (attr)
+    if (attr) {
         replacement->_type = (*attr)->type;
+        replacement->_adaptive = (*attr)->adaptive;
+    }
     std::lock_guard lock(initializationMutex);
     std::atomic_ref<PthreadMutex>(*mutex).store(replacement.release(), std::memory_order_release);
     return 0;
@@ -191,8 +233,9 @@ int APS5_VABI scePthreadMutexDestroy(PthreadMutex* mutex) {
 int APS5_VABI scePthreadMutexLock(PthreadMutex* mutex) {
     auto* resolved = resolveMutex(mutex, true);
     if (!resolved) return SCE_KERNEL_ERROR_EINVAL;
-    return acquireMutex(resolved, [](auto& native) {
-        if (!SpinAcquire(native)) native.lock();
+    const bool adaptive = resolved->_adaptive;
+    return acquireMutex(resolved, [adaptive](auto& native) {
+        LockCounted(native, adaptive);
         return true;
     }, 0, false);
 }

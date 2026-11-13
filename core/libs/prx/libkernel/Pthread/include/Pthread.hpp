@@ -21,12 +21,14 @@ enum class MutexType : std::uint32_t {
 
 struct PthreadMutexattrPrivate {
     MutexType type;
+    bool adaptive = false; // PERF-GTS-269: SCE_PTHREAD_MUTEX_ADAPTIVE (type 4)
 };
 
 struct PthreadMutexPrivate {
     std::recursive_timed_mutex _rmtx;
     std::timed_mutex _mtx;
     MutexType _type;
+    bool _adaptive = false; // PERF-GTS-269
     std::atomic<std::thread::id> _owner;
     int _count;
 
