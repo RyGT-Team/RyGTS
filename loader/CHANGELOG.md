@@ -6,6 +6,17 @@ The version lives in `loader/Version.cs`. To release a change, bump
 `LauncherVersion.Value` there and add a section here with the same number;
 CI fails when the two disagree.
 
+## 0.1.3 - 2026-11-13
+
+* FEAT-GTS-267: The Renderer list on the Graphics page has a third entry, "Native renderer async
+  (experimental)": the native renderer started with the switches of shadGT's PERF-GTS-368 to 388
+  (work moved off the recorder thread or made cheaper on it) at the values tested in races:
+  `RYGT_DIRECT_NESTED_RESUME=1`, `RYGT_DYNAMIC_BUFFER_OFFSETS=1`, `RYGT_LONG_LIVED_SETS=1`,
+  `RYGT_AHEAD_UPLOAD_MB=128`, `RYGT_NATIVE_CHUNK_MB=64`, `RYGT_NATIVE_UPLOAD_VRAM=1`,
+  `RYGT_DRIVER_CACHE_MAX_MB=4096`, `RYGT_UPLOAD_ONCE_A_FRAME=1`, `RYGT_EVICT_SCAN_SHARDS=8`,
+  `RYGT_MIRROR_DROP_BACKOFF=1` and `RYGT_MIRROR_ROUND_MB=4`. A switch set on the Advanced page (or
+  already in the environment) keeps its own value. Saved as `native_async=1` in `RyGT.ini`.
+
 ## 0.1.2 - 2026-11-12
 
 * FEAT-GTS-266: The Advanced page (the renderer's experimental switches) is hidden by default. It

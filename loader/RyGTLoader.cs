@@ -1549,6 +1549,7 @@ namespace RyGT
         public bool HddStreaming = false;
         public bool ShowAdvanced = false; // FEAT-GTS-438: the Advanced page; FEAT-GTS-266: hidden by default
         public bool PromptObsolete = true; // FEAT-GTS-469: offer to remove obsolete config entries
+        public bool NativeAsync = false; // FEAT-GTS-267: "Native renderer async (experimental)"
         public List<EnvVar> Env = new List<EnvVar>(); // FEAT-GTS-433
         readonly string path;
 
@@ -1575,12 +1576,13 @@ namespace RyGT
                 else if (key == "hdd_streaming") HddStreaming = value == "1" || value.Equals("true", StringComparison.OrdinalIgnoreCase);
                 else if (key == "show_advanced") ShowAdvanced = value == "1" || value.Equals("true", StringComparison.OrdinalIgnoreCase);
                 else if (key == "prompt_obsolete") PromptObsolete = !(value == "0" || value.Equals("false", StringComparison.OrdinalIgnoreCase));
+                else if (key == "native_async") NativeAsync = value == "1" || value.Equals("true", StringComparison.OrdinalIgnoreCase);
             }
         }
 
         public void Save()
         {
-            var lines = new List<string> { "game=" + Game, "update=" + Update, "modules=" + Modules, "fonts=" + Fonts, "stdout_level=" + StdoutLevel, "hdd_streaming=" + (HddStreaming ? "1" : "0"), "show_advanced=" + (ShowAdvanced ? "1" : "0"), "prompt_obsolete=" + (PromptObsolete ? "1" : "0") };
+            var lines = new List<string> { "game=" + Game, "update=" + Update, "modules=" + Modules, "fonts=" + Fonts, "stdout_level=" + StdoutLevel, "hdd_streaming=" + (HddStreaming ? "1" : "0"), "show_advanced=" + (ShowAdvanced ? "1" : "0"), "prompt_obsolete=" + (PromptObsolete ? "1" : "0"), "native_async=" + (NativeAsync ? "1" : "0") };
             foreach (var entry in Env) lines.Add("env=" + CustomEnvironment.Format(entry));
             File.WriteAllLines(path, lines);
         }
@@ -3083,7 +3085,9 @@ namespace RyGT
                         WriteSetting("GPU", "wide_scene_height", heights[height.SelectedIndex]);
                         // What the true wide scene needs; the controls show it too.
                         if (uiHiresBox != null) uiHiresBox.Checked = true; else WriteSetting("GPU", "ui_hires", true);
-                        if (rendererCombo != null) rendererCombo.SelectedIndex = 1; else WriteSetting("GPU", "native_renderer", true);
+                        // Either native entry will do (FEAT-GTS-267: the async one is kept).
+                        if (rendererCombo == null) WriteSetting("GPU", "native_renderer", true);
+                        else if (rendererCombo.SelectedIndex == 0) rendererCombo.SelectedIndex = 1;
                     }
                 }
                 catch (Exception e) { MessageBox.Show(this, "Could not save the setting: " + e.Message); }
@@ -3133,17 +3137,24 @@ namespace RyGT
         // Renderer (GPU.native_renderer): the native renderer (the default; GT Sport's command
         // buffers recorded straight into Vulkan, faster in races) or the old renderer (shadGT's,
         // with the direct memory renderer). RYGT_NATIVE=1 or =0 overrides the choice.
+        // FEAT-GTS-267: "Native renderer async (experimental)" is the native renderer started with
+        // NativeAsync's switches (native_async=1 in RyGT.ini; GPU.native_renderer stays true).
         void AddRendererSetting(TableLayoutPanel panel)
         {
             var row = new FlowLayoutPanel { AutoSize = true, BackColor = Color.Transparent, Margin = new Padding(0, 2, 0, 4), WrapContents = false };
             var label = new Label { Text = "Renderer", AutoSize = false, Width = 110, Height = 20, BackColor = Color.Transparent, Margin = new Padding(0, 6, 8, 0) };
-            var renderer = new DarkComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 230, FlatStyle = FlatStyle.Flat };
-            renderer.Items.AddRange(new object[] { "Old renderer", "Native renderer (default)" });
-            renderer.SelectedIndex = ReadSetting("GPU", "native_renderer", true) ? 1 : 0;
+            var renderer = new DarkComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 270, FlatStyle = FlatStyle.Flat };
+            renderer.Items.AddRange(new object[] { "Old renderer", "Native renderer (default)", "Native renderer async (experimental)" });
+            renderer.SelectedIndex = !ReadSetting("GPU", "native_renderer", true) ? 0 : settings.NativeAsync ? 2 : 1;
             rendererCombo = renderer;
             renderer.SelectedIndexChanged += delegate
             {
-                try { WriteSetting("GPU", "native_renderer", renderer.SelectedIndex == 1); }
+                try
+                {
+                    WriteSetting("GPU", "native_renderer", renderer.SelectedIndex >= 1);
+                    settings.NativeAsync = renderer.SelectedIndex == 2;
+                    settings.Save();
+                }
                 catch (Exception e) { MessageBox.Show(this, "Could not save the setting: " + e.Message); }
             };
             row.Controls.Add(label);
@@ -4061,6 +4072,7 @@ namespace RyGT
                     bool shaderObjects = ReadSetting("GPU", "shader_objects", false);
                     StartGame(root, settings.HddStreaming, experimentalSceneSize, antiLag, shaderObjects,
                               ReadSetting("GPU", "shader_pretranslate", false), ReadSetting("GPU", "compile_pack", false),
+                              settings.NativeAsync && ReadSetting("GPU", "native_renderer", true),
                               CustomEnvironment.Copy(settings.Env));
                     status.Text = "GT Sport is starting. Logs: logs\\stdout.log and logs\\stderr.log.";
                 }));
@@ -4071,7 +4083,7 @@ namespace RyGT
 
         /// Starts GTSport.exe with session log rotation and waits for GPU recovery if Vulkan loses
         /// its device.
-        static void StartGame(string root, bool hddStreaming, Size? sceneSize, bool antiLag, bool shaderObjects, bool shaderPretranslate, bool compilePack, List<EnvVar> customEnv)
+        static void StartGame(string root, bool hddStreaming, Size? sceneSize, bool antiLag, bool shaderObjects, bool shaderPretranslate, bool compilePack, bool nativeAsync, List<EnvVar> customEnv)
         {
             string exe = Path.Combine(root, "GTSport.exe");
             // Preserve GT Sport metadata while migrating the launcher publisher field from older installs.
@@ -4118,6 +4130,12 @@ namespace RyGT
                             start.EnvironmentVariables["RYGT_MANIFEST_PRETRANSLATE"] = "1";
                         }
                         if (compilePack) start.EnvironmentVariables["RYGT_COMPILE_PACK"] = "1";
+                        // FEAT-GTS-267: before the user's list, so a switch set on the Advanced page wins.
+                        if (nativeAsync)
+                        {
+                            int preset = NativeAsync.Apply(start);
+                            AppendSetupLog(root, "Native renderer async: " + preset + " renderer switch(es) set.");
+                        }
                         // FEAT-GTS-433: the user's list last, so it wins; only the count is logged.
                         int custom = CustomEnvironment.Apply(start, customEnv);
                         if (custom > 0) AppendSetupLog(root, custom + " custom environment variable(s) applied.");
