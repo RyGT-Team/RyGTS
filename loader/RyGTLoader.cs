@@ -2420,20 +2420,8 @@ namespace RyGT
             controls.Controls.Add(OpenRow("Controller ports: which controller plays as each player, with a live preview", OpenPorts));
             controls.Controls.Add(OpenRow("Button bindings: what each PS4 button is on your controller and keyboard", OpenBindings));
             controls.Controls.Add(OpenRow("Steering wheel: map your wheel and pedals; force feedback strength and feel", OpenWheel));
-            var triggers = Section(controlsPage, "Adaptive triggers");
-            var triggerStrength = new Slider
-            {
-                Minimum = 0, Maximum = 200, SmallChange = 5, LargeChange = 25, Width = 330, Suffix = "%",
-                AccessibleName = "Trigger feedback strength"
-            };
-            triggerStrength.Value = Math.Max(0, Math.Min(200, ReadIntSetting("Input", "trigger_strength", 100)));
-            triggerStrength.ValueChanged += delegate
-            {
-                try { WriteSetting("Input", "trigger_strength", triggerStrength.Value); }
-                catch (Exception e) { MessageBox.Show(this, "Could not save trigger strength: " + e.Message); }
-            };
-            triggers.Controls.Add(new SettingRow("Trigger strength", triggerStrength));
-            triggers.Controls.Add(Hint("0% off, 100% standard, 200% boosted. Updates while playing."));
+            // FEAT-GTS-280: HD rumble and the adaptive triggers (the trigger strength slider moved there).
+            controls.Controls.Add(OpenRow("HD rumble & adaptive triggers: engine, road, wheel slip, ABS and pedal feel, with tests", OpenFeel));
 
             // ---- FEAT-GTS-437: Advanced, the experimental renderer and runtime switches (RYGT_* environment
             // variables) with a description on hover, and any other variable for GTSport.exe.
@@ -2851,6 +2839,15 @@ namespace RyGT
         void OpenWheel()
         {
             using (var form = new WheelForm(root)) form.ShowDialog(this);
+        }
+
+        void OpenFeel()
+        {
+            using (var form = new FeelForm(root, (key, fallback) => ReadIntSetting("Input", key, fallback),
+                                           (key, value) => WriteSetting("Input", key, value)))
+            {
+                form.ShowDialog(this);
+            }
         }
 
         void OpenFolder()

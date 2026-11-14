@@ -161,8 +161,10 @@ int rygt_ndebug_probe(void) { return 0; }
     # builds them); they replace both the archive's and this source's own versions in the package.
     $rendererLibraries = [ordered]@{ ryty_ajm='libSceAjm.prx'; ryty_ngs2='libSceNgs2.prx'; ryty_audio3d='libSceAudio3d.prx';
         ryty_zlib='libSceZlib.prx'; ryty_discmap='libSceDiscMap.prx'; ryty_screenshot='libSceScreenShot.prx'; ryty_np='libSceNpAuth.prx' }
-    Invoke-Checked 'cmake' (@('--build',"$source/Build/ci",'--target','ryty_gpu') + @($rendererLibraries.Keys) + @('--parallel','2'))
-    foreach ($library in $rendererLibraries.Values) {
+    # FEAT-GTS-280: ryty-feel-test, the launcher's HD rumble Test buttons, packaged in tools\.
+    $rendererTools = [ordered]@{ ryty_feel_test='ryty-feel-test.exe' }
+    Invoke-Checked 'cmake' (@('--build',"$source/Build/ci",'--target','ryty_gpu') + @($rendererLibraries.Keys) + @($rendererTools.Keys) + @('--parallel','2'))
+    foreach ($library in @($rendererLibraries.Values) + @($rendererTools.Values)) {
         $built = @(Get-ChildItem "$source/Build/ci" -Recurse -Filter $library)
         if ($built.Count -ne 1) { throw "Expected exactly one renderer-built $library (found $($built.Count))" }
         Copy-Item $built[0].FullName $out

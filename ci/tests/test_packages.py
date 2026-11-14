@@ -96,6 +96,8 @@ class PackageTests(unittest.TestCase):
                     (folder / 'CI-SOURCE.txt').write_text(pin['repository'] + '\n' + RENDERER_SHA + '\n')
                     for library in pkg.RENDERER_LIBRARIES:  # FIX-GTS-262
                         (folder / library).write_bytes(linked_pe(exports=('renderer_' + library.split('.')[0],)))
+                    for tool in pkg.RENDERER_TOOLS:  # FEAT-GTS-280
+                        (folder / tool).write_bytes(linked_pe(exports=('renderer_' + tool.split('.')[0],)))
                 if suffix:
                     pdb = folder / (Path(binary).stem + '.pdb')
                     pdb.write_bytes(b'Microsoft C/C++ MSF 7.00 fixture')
@@ -173,6 +175,7 @@ class PackageTests(unittest.TestCase):
                                              ('converter/ryty.exe', 'artifacts/runtime/ryty.exe'),
                                              ('converter/libstdc++-6.dll', 'artifacts/runtime/libstdc++-6.dll'),
                                              ('tools/ryty-wheel-probe.exe', 'artifacts/runtime/ryty-wheel-probe.exe'),
+                                             ('tools/ryty-feel-test.exe', 'artifacts/renderer' + ('' if variant['channel'] == 'ci' else '-diagnostics') + '/ryty-feel-test.exe'),
                                              ('tools/adcpatch/adcpatch.exe', 'artifacts/tools/adcpatch.exe'),
                                              ('tools/adcpatch/README.txt', 'artifacts/tools/adcpatch-README.txt'),
                                              ('amd_fidelityfx_vk.dll', 'artifacts/tools/amd_fidelityfx_vk.dll'),
