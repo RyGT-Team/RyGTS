@@ -8,6 +8,9 @@ CI fails when the two disagree.
 
 ## 0.1.7 - 2026-11-13
 
+* FEAT-GTS-278: The Advanced page's headers (Renderer, Renderer and runtime, Runtime) and group subheaders
+  close and open with a click (or Left, Right and Space), an arrow showing which. They start open;
+  searching or "Only changed" shows the matches under closed ones, and Refresh and Load keep them.
 * FEAT-GTS-277: The Advanced page splits the switches under a header row per prefix: Renderer (SHADGT_),
   Renderer and runtime (SHARED_), Runtime (RYGT_), each over its groups. Its count line names the
   renderer build by its git describe (shadGT FEAT-GTS-417) instead of the file's date, which stays for older builds.

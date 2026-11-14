@@ -482,6 +482,7 @@ namespace RyGT
             public bool Diagnostics, OnlyChanged;
             public string Profile = ""; // FEAT-GTS-270: the profile picked in the dropdown
             public HashSet<string> Expanded = new HashSet<string>(); // FEAT-GTS-274: the open families
+            public HashSet<string> Collapsed = new HashSet<string>(); // FEAT-GTS-278: the closed headers and subheaders
         }
 
         /// FEAT-GTS-274: switches of one group whose names share their first two words (SHADGT_PARALLEL_*),
@@ -489,7 +490,7 @@ namespace RyGT
         /// has one: then that switch is the family's row.
         sealed class SwitchFamily
         {
-            public string Prefix = "", Key = "";
+            public string Prefix = "", Key = "", Section = "", Group = "";
             public RendererSwitch Switch;
             public DataGridViewRow Row;
             public bool Expanded;
@@ -697,6 +698,10 @@ namespace RyGT
             // FEAT-GTS-277: a header row per prefix, over that prefix's groups: the renderer's switches, the
             // ones both read, then the runtime's.
             var sections = new List<KeyValuePair<DataGridViewRow, string>>();
+            // FEAT-GTS-278: a click on a header or subheader closes or opens what is under it (open at first).
+            var headerKeys = new Dictionary<DataGridViewRow, string>();
+            var headingSection = new Dictionary<DataGridViewRow, string>();
+            var collapsed = view != null ? view.Collapsed : new HashSet<string>();
             var sectionStyle = new DataGridViewCellStyle
             {
                 BackColor = Dark.Field, SelectionBackColor = Dark.Field, ForeColor = Color.White, SelectionForeColor = Color.White,
@@ -754,6 +759,7 @@ namespace RyGT
                     header.DefaultCellStyle = sectionStyle;
                     header.Height = 32;
                     sections.Add(new KeyValuePair<DataGridViewRow, string>(header, section));
+                    headerKeys[header] = "S:" + section;
                 }
                 var members = catalog.Where(c => c.Group == group && SectionOf(c.Name) == section).ToList();
                 int h = grid.Rows.Add(group, "", "");
@@ -762,6 +768,8 @@ namespace RyGT
                 heading.ReadOnly = true;
                 heading.DefaultCellStyle = headingStyle;
                 headings.Add(new KeyValuePair<DataGridViewRow, string>(heading, section + group));
+                headerKeys[heading] = "G:" + section + group;
+                headingSection[heading] = section;
                 var familyNames = new HashSet<string>(members.Select(c => FamilyPrefix(c.Name)).Where(f => f != null)
                                                              .GroupBy(f => f).Where(f => f.Count() >= 2).Select(f => f.Key));
                 var placed = new HashSet<string>();
@@ -772,7 +780,7 @@ namespace RyGT
                     string key = prefix != null && familyNames.Contains(prefix) ? prefix : familyNames.Contains(sw.Name) ? sw.Name : null;
                     if (key == null) { standalone.Add(sw); continue; }
                     if (!placed.Add(key)) continue; // already under its family's row
-                    var family = new SwitchFamily { Prefix = key, Key = group + "|" + key, Switch = members.FirstOrDefault(c => c.Name == key) };
+                    var family = new SwitchFamily { Prefix = key, Key = group + "|" + key, Section = section, Group = group, Switch = members.FirstOrDefault(c => c.Name == key) };
                     family.Expanded = expanded.Contains(family.Key);
                     string familyKey = key;
                     var children = members.Where(c => c.Name != familyKey && FamilyPrefix(c.Name) == familyKey).ToList();
@@ -815,6 +823,10 @@ namespace RyGT
             int lastShown = 0;
             // FEAT-GTS-274: open by a click, or while the search or "Only changed" narrows the table.
             Func<SwitchFamily, bool> isOpen = family => family.Expanded || search.Text.Trim().Length > 0 || onlyChanged.Checked;
+            // FEAT-GTS-278: a header or subheader is open unless closed by a click; searching or "Only changed"
+            // opens them all, like the families.
+            Func<string, bool> headerOpen = key => !collapsed.Contains(key) || search.Text.Trim().Length > 0 || onlyChanged.Checked;
+            Func<string, string, bool> underOpen = (section, group) => headerOpen("S:" + section) && headerOpen("G:" + section + group);
             Action filter = delegate
             {
                 string text = search.Text.Trim();
@@ -840,11 +852,14 @@ namespace RyGT
                     bool visible = matched.Contains(pair.Key);
                     if (familyOf.TryGetValue(pair.Key, out family)) visible = visible && (sortColumn >= 0 || isOpen(family));
                     else if (sortColumn < 0 && families.TryGetValue(pair.Key, out family)) visible = visible || family.Children.Any(matched.Contains);
+                    if (sortColumn < 0 && !underOpen(SectionOf(pair.Value.Name), pair.Value.Group)) visible = false;
                     pair.Key.Visible = visible;
                 }
                 foreach (var family in families.Values)
-                    if (family.Switch == null) family.Row.Visible = sortColumn < 0 && family.Children.Any(matched.Contains);
-                foreach (var heading in headings) heading.Key.Visible = sortColumn < 0 && visibleGroups.Contains(heading.Value);
+                    if (family.Switch == null)
+                        family.Row.Visible = sortColumn < 0 && family.Children.Any(matched.Contains) && underOpen(family.Section, family.Group);
+                foreach (var heading in headings)
+                    heading.Key.Visible = sortColumn < 0 && visibleGroups.Contains(heading.Value) && headerOpen("S:" + headingSection[heading.Key]);
                 foreach (var header in sections) header.Key.Visible = sortColumn < 0 && visibleGroups.Contains(header.Value);
                 grid.ResumeLayout();
                 count.Text = walkError != null ? "Could not read " + SwitchWalker.RendererFile + ": " + walkError
@@ -966,6 +981,21 @@ namespace RyGT
                                       TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
                 e.Handled = true;
             };
+            // FEAT-GTS-278: a header's or subheader's arrow, then its text.
+            grid.CellPainting += (sender, e) =>
+            {
+                string key;
+                if (e.RowIndex < 0 || e.ColumnIndex != 0 || sortColumn >= 0 || !headerKeys.TryGetValue(grid.Rows[e.RowIndex], out key)) return;
+                e.PaintBackground(e.ClipBounds, (e.State & DataGridViewElementStates.Selected) != 0);
+                var b = e.CellBounds;
+                int x = b.X + e.CellStyle.Padding.Left + 3;
+                const TextFormatFlags line = TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine |
+                                             TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding;
+                TextRenderer.DrawText(e.Graphics, headerOpen(key) ? "\u25BE" : "\u25B8", grid.Font, new Rectangle(x, b.Y, 14, b.Height), e.CellStyle.ForeColor, line);
+                TextRenderer.DrawText(e.Graphics, Convert.ToString(e.Value), e.CellStyle.Font, new Rectangle(x + 16, b.Y, Math.Max(0, b.Right - x - 20), b.Height),
+                                      e.CellStyle.ForeColor, line | TextFormatFlags.EndEllipsis);
+                e.Handled = true;
+            };
             // FEAT-GTS-274: a family row's name cell: an arrow, the name, and how many switches it holds (and
             // how many are changed); its switches are indented under it.
             grid.CellPainting += (sender, e) =>
@@ -1057,9 +1087,20 @@ namespace RyGT
                 if (row.Visible) grid.CurrentCell = row.Cells[0];
                 grid.InvalidateRow(row.Index);
             };
+            Action<DataGridViewRow> openOrCloseHeader = row =>
+            {
+                string key;
+                if (sortColumn >= 0 || !headerKeys.TryGetValue(row, out key)) return;
+                if (grid.IsCurrentCellInEditMode) grid.EndEdit();
+                if (!collapsed.Remove(key)) collapsed.Add(key);
+                filter();
+                if (row.Visible) grid.CurrentCell = row.Cells[0];
+                grid.InvalidateRow(row.Index);
+            };
             DataGridViewCellMouseEventHandler click = (sender, e) =>
             {
                 if (e.Button != MouseButtons.Left || e.RowIndex < 0) return;
+                if (headerKeys.ContainsKey(grid.Rows[e.RowIndex])) { openOrCloseHeader(grid.Rows[e.RowIndex]); return; } // FEAT-GTS-278
                 if (onSwitch(e)) toggle(e.RowIndex);
                 else openOrClose(grid.Rows[e.RowIndex]);
             };
@@ -1068,7 +1109,8 @@ namespace RyGT
             grid.CellMouseMove += (sender, e) =>
             {
                 RendererSwitch s;
-                bool family = e.RowIndex >= 0 && sortColumn < 0 && families.ContainsKey(grid.Rows[e.RowIndex]);
+                bool family = e.RowIndex >= 0 && sortColumn < 0 &&
+                              (families.ContainsKey(grid.Rows[e.RowIndex]) || headerKeys.ContainsKey(grid.Rows[e.RowIndex]));
                 bool hand = e.RowIndex >= 0 && (family || (e.ColumnIndex == 1 && rowSwitch.TryGetValue(grid.Rows[e.RowIndex], out s) && s.IsFlag));
                 grid.Cursor = hand ? Cursors.Hand : Cursors.Default;
             };
@@ -1078,6 +1120,15 @@ namespace RyGT
             grid.KeyDown += (sender, e) =>
             {
                 var cell = grid.CurrentCell;
+                string headerKey;
+                if (cell != null && sortColumn < 0 && headerKeys.TryGetValue(grid.Rows[cell.RowIndex], out headerKey) &&
+                    ((e.KeyCode == Keys.Right && collapsed.Contains(headerKey)) || (e.KeyCode == Keys.Left && !collapsed.Contains(headerKey)) ||
+                     e.KeyCode == Keys.Space))
+                {
+                    openOrCloseHeader(grid.Rows[cell.RowIndex]); // FEAT-GTS-278
+                    e.Handled = true;
+                    return;
+                }
                 SwitchFamily family;
                 if (cell != null && sortColumn < 0 && !grid.IsCurrentCellInEditMode && families.TryGetValue(grid.Rows[cell.RowIndex], out family) &&
                     (cell.ColumnIndex != 1 || family.Switch == null) &&
@@ -1186,6 +1237,7 @@ namespace RyGT
                 var keepView = new ViewState
                 {
                     Search = search.Text, Diagnostics = showDiagnostics.Checked, OnlyChanged = onlyChanged.Checked, Expanded = expanded,
+                    Collapsed = collapsed,
                     Profile = profileName ?? ""
                 };
                 var form = page.FindForm();
