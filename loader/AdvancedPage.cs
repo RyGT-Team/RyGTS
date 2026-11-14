@@ -498,6 +498,8 @@ namespace RyGT
 
         /// FEAT-GTS-277: the header rows, in this order: the renderer's switches, the shared ones, the runtime's.
         static readonly string[] SectionOrder = { "SHADGT_", "SHARED_", "RYGT_" };
+        /// How far the groups and switches sit right of their section's header.
+        const int SectionIndent = 12;
 
         static string SectionOf(string name)
         {
@@ -680,6 +682,8 @@ namespace RyGT
             grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "default", HeaderText = "When not set", ReadOnly = true, FillWeight = 38, AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, SortMode = DataGridViewColumnSortMode.Programmatic });
             grid.Columns[2].DefaultCellStyle.ForeColor = Dark.DimText;
             grid.Columns[0].DefaultCellStyle.Font = new Font("Consolas", 9f);
+            // The section headers stick out to the left of the groups and switches under them.
+            grid.Columns[0].DefaultCellStyle.Padding = new Padding(SectionIndent, 0, 0, 0);
             grid.Columns[1].DefaultCellStyle.Padding = new Padding(9, 5, 9, 5); // the editor inside the drawn box
 
             var headingStyle = new DataGridViewCellStyle
@@ -695,7 +699,8 @@ namespace RyGT
             var sectionStyle = new DataGridViewCellStyle
             {
                 BackColor = Dark.Field, SelectionBackColor = Dark.Field, ForeColor = Color.White, SelectionForeColor = Color.White,
-                Font = new Font("Segoe UI Semibold", 10f, FontStyle.Italic)
+                Font = new Font("Segoe UI Semibold", 10f, FontStyle.Italic),
+                Padding = new Padding(1, 0, 0, 0) // not Empty, which would take the column's indent
             };
             // FEAT-GTS-274: switches of a group whose names share their first two words (SHADGT_PARALLEL_*) are
             // one family row, closed at first, instead of scattered through hundreds of rows.
@@ -971,9 +976,9 @@ namespace RyGT
                 var b = e.CellBounds;
                 const TextFormatFlags line = TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine |
                                              TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding;
-                TextRenderer.DrawText(g, isOpen(family) ? "\u25BE" : "\u25B8", grid.Font, new Rectangle(b.X + 5, b.Y, 14, b.Height), Dark.DimText, line);
+                TextRenderer.DrawText(g, isOpen(family) ? "\u25BE" : "\u25B8", grid.Font, new Rectangle(b.X + SectionIndent + 3, b.Y, 14, b.Height), Dark.DimText, line);
                 string name = family.Switch != null ? family.Switch.Name : family.Prefix;
-                int x = b.X + 21;
+                int x = b.X + SectionIndent + 19;
                 var nameArea = new Rectangle(x, b.Y, Math.Max(0, b.Right - x - 4), b.Height);
                 TextRenderer.DrawText(g, name, e.CellStyle.Font, nameArea, e.CellStyle.ForeColor, line | TextFormatFlags.EndEllipsis);
                 x += TextRenderer.MeasureText(g, name, e.CellStyle.Font, nameArea.Size, line).Width + 10;
@@ -987,7 +992,7 @@ namespace RyGT
             grid.CellFormatting += (sender, e) =>
             {
                 if (e.ColumnIndex == 0 && e.RowIndex >= 0 && sortColumn < 0 && familyOf.ContainsKey(grid.Rows[e.RowIndex]))
-                    e.CellStyle.Padding = new Padding(22, 0, 0, 0);
+                    e.CellStyle.Padding = new Padding(SectionIndent + 22, 0, 0, 0);
             };
             // The editor sits inside the same box.
             grid.EditingControlShowing += (sender, e) =>
