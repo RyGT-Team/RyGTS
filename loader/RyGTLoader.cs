@@ -2404,15 +2404,26 @@ namespace RyGT
             advancedHost.Controls.Add(advancedPage);
             pagesHost.Controls.Add(advancedHost);
             pages["Advanced"] = advancedHost;
-            AdvancedPage.Build(advancedPage,
-                PageTitle("Advanced", "Experimental renderer switches for testing and diagnosis. They can break rendering, slow the game " +
-                                      "or write large logs; hover a switch for what it does. Saved as you change them; used the next time the game starts."),
-                Dark.Card, root, settings.Env, list =>
-                {
-                    settings.Env = list;
-                    try { settings.Save(); }
-                    catch (Exception e) { MessageBox.Show(this, "Could not save the switches: " + e.Message); }
-                });
+            // FEAT-GTS-271: built the first time the page is shown: the walk reads every libs\*.prx (the
+            // renderer and the runtime modules), which most players, with the page hidden, never need.
+            bool advancedBuilt = false;
+            advancedHost.VisibleChanged += delegate
+            {
+                if (advancedBuilt || !advancedHost.Visible) return;
+                advancedBuilt = true;
+                advancedPage.SuspendLayout();
+                AdvancedPage.Build(advancedPage,
+                    PageTitle("Advanced", "Experimental renderer switches for testing and diagnosis. They can break rendering, slow the game " +
+                                          "or write large logs; hover a switch for what it does. Saved as you change them; used the next time the game starts."),
+                    Dark.Card, root, settings.Env, list =>
+                    {
+                        settings.Env = list;
+                        try { settings.Save(); }
+                        catch (Exception e) { MessageBox.Show(this, "Could not save the switches: " + e.Message); }
+                    });
+                Dark.Apply(advancedPage);
+                advancedPage.ResumeLayout(true);
+            };
             showAdvanced = delegate (bool on)
             {
                 if (on) hiddenPages.Remove("Advanced"); else hiddenPages.Add("Advanced");

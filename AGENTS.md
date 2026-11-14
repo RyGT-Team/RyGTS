@@ -10,10 +10,10 @@ in `loader/AdvancedPage.cs` reads `libs\libSceVideoOut.prx` (the copy the game l
 
 - **Adding a renderer switch:** add its description line in shadGT's `src/video_core/rygt_switches.cpp`
   (format in shadGT's `AGENTS.md`). Do not add switch names, tooltips or defaults to the launcher.
-- **Adding a switch read by the RyGTS runtime itself** (`core/`, `app/`, ...): the launcher only walks
-  the renderer DLL, so a runtime-only switch is not listed. Users can still set it under "Other
-  environment variables". To list it, describe it in the renderer's table too, and extend the walker
-  to the module that reads it.
+- **Adding a switch read by the RyGTS runtime itself** (`core/`, `app/`, ...): the walker reads every
+  `libs\*.prx`, the runtime modules included (ASCII and UTF-16 names, so `_wgetenv(L"RYGT_...")` is
+  found), so it is listed. Describe it in shadGT's `src/video_core/rygt_switches.cpp` like a renderer
+  switch (group `Runtime` or the one that fits); the walker takes descriptions from any of the files.
 - **A variable the launcher sets itself** (`RYGT_LOG_DIRECTORY`, `RYGT_HDD_STREAMING`,
   `RYGT_ANTI_LAG`, the render-scale ones in `loader/RenderResolution.cs`): add it to
   `SwitchWalker.LauncherManaged` so the page does not offer it.

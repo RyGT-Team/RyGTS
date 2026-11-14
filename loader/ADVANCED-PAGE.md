@@ -25,6 +25,24 @@ is not listed. Switches the launcher sets from its own settings (`RYGT_LOG_DIREC
 ones always show). Search matches names and descriptions; "Only changed" shows what is set; Reset all
 returns every switch to its default. Delete on a setting returns it to the default.
 
+## Runtime switches (FEAT-GTS-271)
+
+Besides the renderer, the walker reads every other `libs\*.prx`: the runtime modules (libkernel, libc,
+libSceAvPlayer, libSceUserService, libSceNpAuth, ...) read switches of their own, some as UTF-16
+strings (`_wgetenv(L"RYGT_USER_NAME")`), which the walker reads too. Their descriptions come from
+shadGT's table like the renderer's. Reading all the modules takes about half a second, so the page
+is built the first time it is opened, not when the launcher starts.
+
+## Profiles (FEAT-GTS-270)
+
+The Profile row above the table keeps named sets of the page's settings, to swap between
+configurations. **Save...** asks for a name (the selected profile's, to overwrite it) and writes the
+current switches and other variables to `launcher\profiles\<name>.ini`: a comment line and the same
+`env=<1|0>|NAME=VALUE` lines as `RyGT.ini`, so a profile can be copied or shared as a file. **Load**
+replaces the current settings with the selected profile's (after asking) and builds the page again,
+keeping the search and filters. A profile holds everything the page sets; switches it does not name
+are at their defaults after loading it.
+
 ## Other environment variables
 
 Any variable the list does not have goes in the table under it (On / Name / Value). Names are

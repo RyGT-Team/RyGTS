@@ -54,9 +54,57 @@ namespace RyGT
 
         public static List<RendererSwitch> Walk(string path)
         {
-            byte[] data = File.ReadAllBytes(path);
             var names = new HashSet<string>(StringComparer.Ordinal);
             var described = new Dictionary<string, RendererSwitch>(StringComparer.Ordinal);
+            Scan(File.ReadAllBytes(path), names, described);
+            return Catalog(names, described);
+        }
+
+        /// FEAT-GTS-271: the renderer and the runtime modules: every libs\*.prx. The runtime's switches
+        /// (libkernel, libc, libSceAvPlayer, libSceUserService, ...) are listed with the renderer's;
+        /// their descriptions may come from any of these files (shadGT's table describes them).
+        /// A file that cannot be read is skipped; the renderer itself must be readable.
+        public static List<RendererSwitch> WalkAll(string root)
+        {
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            var described = new Dictionary<string, RendererSwitch>(StringComparer.Ordinal);
+            string renderer = Path.Combine(root, RendererFile);
+            Scan(File.ReadAllBytes(renderer), names, described);
+            string libs = Path.GetDirectoryName(renderer);
+            string[] modules = new string[0];
+            try { modules = Directory.GetFiles(libs, "*.prx"); }
+            catch { }
+            foreach (var module in modules)
+            {
+                if (string.Equals(Path.GetFullPath(module), Path.GetFullPath(renderer), StringComparison.OrdinalIgnoreCase)) continue;
+                try { Scan(File.ReadAllBytes(module), names, described); }
+                catch { }
+            }
+            return Catalog(names, described);
+        }
+
+        /// The names in one file: ASCII strings, and UTF-16 ones (_wgetenv(L"RYGT_...")); and the
+        /// description strings (ASCII).
+        static void Scan(byte[] data, HashSet<string> names, Dictionary<string, RendererSwitch> described)
+        {
+            for (int i = 0; i + 13 < data.Length; ++i)
+            {
+                if ((data[i] != (byte)'R' && data[i] != (byte)'S') || data[i + 1] != 0) continue;
+                if (i >= 2 && data[i - 1] == 0 && IsNameByte(data[i - 2])) continue;
+                // UTF-16LE: R\0Y\0G\0T\0_\0 or S\0H\0A\0D\0G\0T\0_\0, ended by \0\0.
+                var text = new StringBuilder();
+                int j = i;
+                while (j + 1 < data.Length && text.Length < 128 && data[j + 1] == 0 && data[j] != 0)
+                {
+                    text.Append((char)data[j]);
+                    j += 2;
+                }
+                if (j + 1 < data.Length && data[j] == 0 && data[j + 1] == 0 && IsSwitchName(text.ToString()))
+                {
+                    names.Add(text.ToString());
+                    i = j + 1;
+                }
+            }
             for (int i = 0; i + 5 < data.Length; ++i)
             {
                 // Strings may follow other data directly (the compiler packs them), so only a name
@@ -77,6 +125,10 @@ namespace RyGT
                     names.Add(text);
             }
 
+        }
+
+        static List<RendererSwitch> Catalog(HashSet<string> names, Dictionary<string, RendererSwitch> described)
+        {
             var list = new List<RendererSwitch>();
             // Only names the renderer really reads: a description alone (e.g. for a switch that only a
             // diagnostics build reads) adds nothing.
@@ -167,6 +219,96 @@ namespace RyGT
         }
     }
 
+    /// FEAT-GTS-270: the Advanced page's profiles, one file per profile in launcher\profiles: a comment line
+    /// and the same env=<1|0>|NAME=VALUE lines as the settings file.
+    static class Profiles
+    {
+        public const string Folder = @"launcher\profiles";
+
+        public static List<string> List(string dir)
+        {
+            var names = new List<string>();
+            try
+            {
+                if (Directory.Exists(dir))
+                    foreach (var file in Directory.GetFiles(dir, "*.ini")) names.Add(Path.GetFileNameWithoutExtension(file));
+            }
+            catch { }
+            names.Sort(StringComparer.OrdinalIgnoreCase);
+            return names;
+        }
+
+        public static string PathOf(string dir, string name)
+        {
+            return Path.Combine(dir, name + ".ini");
+        }
+
+        /// A name usable as a file name: no path or reserved characters, at most 60 characters.
+        public static string Clean(string name)
+        {
+            var text = new StringBuilder();
+            foreach (char c in (name ?? "").Trim())
+                if (Array.IndexOf(Path.GetInvalidFileNameChars(), c) < 0) text.Append(c);
+            string clean = text.ToString().Trim().TrimEnd('.');
+            return clean.Length > 60 ? clean.Substring(0, 60).Trim() : clean;
+        }
+
+        public static void Write(string path, string name, List<EnvVar> env)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            var lines = new List<string> { "# Launcher profile \"" + name + "\": switches and other variables for the game." };
+            foreach (var entry in env) lines.Add("env=" + CustomEnvironment.Format(entry));
+            File.WriteAllLines(path, lines);
+        }
+
+        /// The profile's entries, or null if the file cannot be read.
+        public static List<EnvVar> Read(string path)
+        {
+            try
+            {
+                var list = new List<EnvVar>();
+                foreach (var line in File.ReadAllLines(path))
+                {
+                    if (!line.StartsWith("env=", StringComparison.Ordinal)) continue;
+                    var entry = CustomEnvironment.Parse(line.Substring(4));
+                    if (entry != null) list.Add(entry);
+                }
+                return list;
+            }
+            catch { return null; }
+        }
+
+        /// Asks for a profile name (the selected one to start with); null if cancelled.
+        public static string AskName(IWin32Window owner, string suggestion)
+        {
+            using (var dialog = new Form
+            {
+                Text = "Save profile", FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false,
+                ShowInTaskbar = false, StartPosition = FormStartPosition.CenterParent, ClientSize = new Size(380, 128),
+                Font = new Font("Segoe UI", 9f)
+            })
+            {
+                var label = new Label { Text = "Profile name", AutoSize = true, Location = new Point(16, 16) };
+                var field = new Card(Dark.Field) { AutoSize = false, Location = new Point(16, 40), Size = new Size(348, 30), Radius = 6, Edge = Color.Empty, Padding = new Padding(10, 7, 10, 4) };
+                var box = new TextBox { Text = suggestion, Dock = DockStyle.Fill, BorderStyle = BorderStyle.None, AccessibleName = "Profile name" };
+                field.Controls.Add(box);
+                var ok = new Button { Text = "Save", AutoSize = true, DialogResult = DialogResult.OK, Location = new Point(214, 84) };
+                var cancel = new Button { Text = "Cancel", AutoSize = true, DialogResult = DialogResult.Cancel, Location = new Point(290, 84) };
+                dialog.Controls.AddRange(new Control[] { label, field, ok, cancel });
+                dialog.AcceptButton = ok;
+                dialog.CancelButton = cancel;
+                Dark.Apply(dialog);
+                Action check = delegate { ok.Enabled = Clean(box.Text).Length > 0; };
+                box.TextChanged += delegate { check(); };
+                check();
+                dialog.Shown += delegate { box.Focus(); box.SelectAll(); };
+                if (dialog.ShowDialog(owner) != DialogResult.OK) return null;
+                string name = Clean(box.Text);
+                return name.Length > 0 ? name : null;
+            }
+        }
+    }
+
     sealed class RowComparer : System.Collections.IComparer
     {
         readonly Comparison<DataGridViewRow> compare;
@@ -188,6 +330,7 @@ namespace RyGT
         {
             public string Search = "";
             public bool Diagnostics, OnlyChanged;
+            public string Profile = ""; // FEAT-GTS-270: the profile picked in the dropdown
         }
 
         public static void Build(TableLayoutPanel page, Control title, Color cardFill, string root, List<EnvVar> env, Action<List<EnvVar>> save)
@@ -204,7 +347,7 @@ namespace RyGT
             Action<List<EnvVar>> keep = list => { savedEnv = list; save(list); };
             List<RendererSwitch> catalog;
             string walkError = null;
-            try { catalog = SwitchWalker.Walk(rendererPath); }
+            try { catalog = SwitchWalker.WalkAll(root); } // FEAT-GTS-271: the runtime modules too
             catch (Exception e) { catalog = new List<RendererSwitch>(); walkError = e.Message; }
             var known = new HashSet<string>(catalog.Select(s => s.Name));
             string rendererDate = "";
@@ -238,6 +381,48 @@ namespace RyGT
             page.ColumnCount = 1;
             page.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             page.Controls.Add(title);
+
+            // FEAT-GTS-270: profiles, named sets of the switches and other variables kept as
+            // launcher\profiles\<name>.ini (the same env= lines as the settings file), to swap between
+            // configurations instead of tracking several similar switches by hand.
+            string profileDir = Path.Combine(root, Profiles.Folder);
+            var profileRow = new FlowLayoutPanel { AutoSize = true, WrapContents = false, BackColor = Color.Transparent, Margin = new Padding(0, 0, 0, 8) };
+            profileRow.Controls.Add(new Label { Text = "Profile", AutoSize = true, BackColor = Color.Transparent, Margin = new Padding(0, 7, 10, 0) });
+            var profiles = new DarkComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, Width = 240, Margin = new Padding(0, 2, 8, 0),
+                AccessibleName = "Profile"
+            };
+            var saveProfile = new Button { Text = "Save...", AutoSize = true, Margin = new Padding(0, 1, 8, 0), AccessibleName = "Save profile" };
+            var loadProfile = new Button { Text = "Load", AutoSize = true, Margin = new Padding(0, 1, 0, 0), AccessibleName = "Load profile" };
+            var profileNote = new Label { AutoSize = true, ForeColor = Dark.DimText, Tag = "heading", BackColor = Color.Transparent, Margin = new Padding(14, 7, 0, 0) };
+            var profileTips = new ToolTip();
+            profileTips.SetToolTip(saveProfile, "Save the current switches and other variables as a profile (" + Profiles.Folder + ").");
+            profileTips.SetToolTip(loadProfile, "Replace the current switches and other variables with the selected profile's.");
+            saveProfile.Disposed += delegate { profileTips.Dispose(); };
+            Action<string> listProfiles = select =>
+            {
+                profiles.Items.Clear();
+                foreach (var name in Profiles.List(profileDir)) profiles.Items.Add(name);
+                int at = select == null ? -1 : profiles.Items.IndexOf(select);
+                profiles.SelectedIndex = at >= 0 ? at : -1;
+                loadProfile.Enabled = profiles.SelectedIndex >= 0;
+                if (profiles.Items.Count == 0) profileNote.Text = "No profiles yet: set some switches, then Save.";
+            };
+            profiles.SelectedIndexChanged += delegate
+            {
+                loadProfile.Enabled = profiles.SelectedIndex >= 0;
+                if (profiles.SelectedIndex < 0) return;
+                var entries = Profiles.Read(Profiles.PathOf(profileDir, (string)profiles.SelectedItem));
+                profileNote.Text = entries == null ? "Could not read this profile." :
+                                   entries.Count + (entries.Count == 1 ? " setting" : " settings") + " in this profile";
+            };
+            profileRow.Controls.Add(profiles);
+            profileRow.Controls.Add(saveProfile);
+            profileRow.Controls.Add(loadProfile);
+            profileRow.Controls.Add(profileNote);
+            page.Controls.Add(profileRow);
+            listProfiles(view != null ? view.Profile : null);
 
             // The search box, the filters and Reset all.
             var bar = new FlowLayoutPanel { AutoSize = true, WrapContents = true, BackColor = Color.Transparent, Margin = new Padding(0, 0, 0, 8) };
@@ -346,6 +531,7 @@ namespace RyGT
             page.Controls.Add(card);
             page.RowStyles.Clear();
             page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            page.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // FEAT-GTS-270: the profile row
             page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             page.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -615,10 +801,13 @@ namespace RyGT
 
             // FEAT-GTS-467: Refresh builds the page again from a fresh read of the renderer, keeping the
             // saved settings (as last saved), the search text and the two filters.
-            refresh.Click += delegate
+            Action<List<EnvVar>, string> rebuild = (newEnv, profileName) =>
             {
-                if (grid.IsCurrentCellInEditMode) grid.EndEdit();
-                var keepView = new ViewState { Search = search.Text, Diagnostics = showDiagnostics.Checked, OnlyChanged = onlyChanged.Checked };
+                var keepView = new ViewState
+                {
+                    Search = search.Text, Diagnostics = showDiagnostics.Checked, OnlyChanged = onlyChanged.Checked,
+                    Profile = profileName ?? ""
+                };
                 var form = page.FindForm();
                 page.SuspendLayout();
                 page.Resize -= onResize;
@@ -628,12 +817,48 @@ namespace RyGT
                 page.RowStyles.Clear();
                 page.ColumnStyles.Clear();
                 foreach (var control in old) control.Dispose();
-                Build(page, title, cardFill, root, savedEnv, save, keepView);
+                Build(page, title, cardFill, root, newEnv, save, keepView);
                 Dark.Apply(page);
                 if (cardFill.A < 255) Dark.SeeThrough(page);
                 page.ResumeLayout(true);
                 page.Invalidate(true);
                 if (form != null) form.ActiveControl = null;
+            };
+            refresh.Click += delegate
+            {
+                if (grid.IsCurrentCellInEditMode) grid.EndEdit();
+                rebuild(savedEnv, profiles.SelectedItem as string);
+            };
+
+            // FEAT-GTS-270: Save writes the current switches and other variables (as last saved) to a profile;
+            // Load replaces them with a profile's and builds the page again.
+            saveProfile.Click += delegate
+            {
+                if (grid.IsCurrentCellInEditMode) grid.EndEdit();
+                string name = Profiles.AskName(page.FindForm(), profiles.SelectedItem as string ?? "");
+                if (name == null) return;
+                string path = Profiles.PathOf(profileDir, name);
+                if (File.Exists(path) &&
+                    MessageBox.Show(page.FindForm(), "Replace the profile \"" + name + "\" with the current settings?", "Save profile",
+                                    MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
+                try { Profiles.Write(path, name, savedEnv); }
+                catch (Exception e) { MessageBox.Show(page.FindForm(), "Could not save the profile: " + e.Message); return; }
+                listProfiles(name);
+                profileNote.Text = "Saved " + savedEnv.Count + (savedEnv.Count == 1 ? " setting" : " settings") + " as \"" + name + "\"";
+            };
+            loadProfile.Click += delegate
+            {
+                string name = profiles.SelectedItem as string;
+                if (name == null) return;
+                if (grid.IsCurrentCellInEditMode) grid.EndEdit();
+                var entries = Profiles.Read(Profiles.PathOf(profileDir, name));
+                if (entries == null) { MessageBox.Show(page.FindForm(), "Could not read the profile \"" + name + "\"."); return; }
+                if (savedEnv.Count > 0 &&
+                    MessageBox.Show(page.FindForm(), "Replace the current " + savedEnv.Count + (savedEnv.Count == 1 ? " setting" : " settings") +
+                                    " with the profile \"" + name + "\" (" + entries.Count + ")?", "Load profile",
+                                    MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
+                keep(entries);
+                rebuild(entries, name);
             };
             if (view != null)
             {
