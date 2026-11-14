@@ -51,15 +51,27 @@ namespace RyGT
     }
 
     /// "Remove obsolete settings?": Yes removes them, No keeps them; "Don't show again" stops the question.
+    /// FEAT-GTS-275: with `renames`, the list also holds switches saved under an old name, and Yes renames them.
     class ObsoleteSettingsDialog : Form
     {
         readonly DarkCheckBox dontShow;
 
+        /// At most 15 lines, then how many more.
+        static string[] Shorten(IList<string> entries)
+        {
+            var lines = new List<string>(entries);
+            if (lines.Count <= 15) return lines.ToArray();
+            int more = lines.Count - 14;
+            lines = lines.GetRange(0, 14);
+            lines.Add("... and " + more + " more");
+            return lines.ToArray();
+        }
+
         public bool DontShowAgain { get { return dontShow.Checked; } }
 
-        public ObsoleteSettingsDialog(IList<string> entries)
+        public ObsoleteSettingsDialog(IList<string> entries, bool renames = false)
         {
-            Text = "Remove obsolete settings?";
+            Text = renames ? "Update obsolete settings?" : "Remove obsolete settings?";
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = MinimizeBox = ShowInTaskbar = false;
             StartPosition = FormStartPosition.CenterParent;
@@ -84,11 +96,15 @@ namespace RyGT
                 MaximumSize = new Size(440, 0),
                 BackColor = Color.Transparent,
                 Margin = new Padding(0, 0, 0, 10),
-                Text = "Your config file contains one or more obsolete entries:\n\n    " +
-                       string.Join("\n    ", new List<string>(entries).ToArray()) +
-                       "\n\nNothing in this version of RyGTS reads them. Consider that an older RyGTS may still " +
-                       "use them.\n\nDo you wish to let the launcher remove them for you now? " +
-                       "The change is saved to the config right away."
+                Text = (renames ? "Your settings contain one or more obsolete entries:\n\n    "
+                                : "Your config file contains one or more obsolete entries:\n\n    ") +
+                       string.Join("\n    ", Shorten(entries)) +
+                       "\n\nNothing in this version of RyGTS reads them" + (renames ? " under these names" : "") +
+                       ". Consider that an older RyGTS may still use them." +
+                       (renames ? "\n\nThe switches are now named after where they take effect: SHADGT_ for the renderer, " +
+                                  "RYGT_ for the runtime, SHARED_ for both." : "") +
+                       "\n\nDo you wish to let the launcher " + (renames ? "update" : "remove") + " them for you now? " +
+                       "The change is saved right away."
             };
             layout.Controls.Add(message, 1, 0);
 

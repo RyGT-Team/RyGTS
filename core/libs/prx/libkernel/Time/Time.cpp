@@ -355,7 +355,7 @@ static DiagRecordFn RendererDiag() {
 bool KernelDiagEnabled() {
 #ifdef _WIN32
     static const bool enabled = [] {
-        const char* env = std::getenv("RYGT_DIAG");
+        const char* env = std::getenv("SHARED_DIAG");
         return env != nullptr && env[0] == '1';
     }();
     return enabled;

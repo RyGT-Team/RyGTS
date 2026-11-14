@@ -19,6 +19,47 @@ namespace RyGT
         public string Name = "", Kind = "", Default = "", Values = "", Tooltip = "", Group = "";
 
         public bool IsFlag { get { return Kind == "flag"; } }
+        /// FEAT-GTS-276: a fixed set of values, offered in a dropdown.
+        public bool IsChoice { get { return Kind == "choice" && Choices.Count > 0; } }
+
+        List<KeyValuePair<string, string>> choices;
+
+        /// FEAT-GTS-276: a choice switch's values and what they mean, from the values field: "value" or
+        /// "value = meaning", separated by ";", and "A..B" for every whole number from A to B.
+        public List<KeyValuePair<string, string>> Choices
+        {
+            get
+            {
+                if (choices != null) return choices;
+                choices = new List<KeyValuePair<string, string>>();
+                if (Kind != "choice") return choices;
+                foreach (var raw in Values.Split(';'))
+                {
+                    string part = raw.Trim();
+                    if (part.Length == 0) continue;
+                    var range = System.Text.RegularExpressions.Regex.Match(part, @"^(-?\d+)\.\.(-?\d+)$");
+                    int from, to;
+                    if (range.Success && int.TryParse(range.Groups[1].Value, out from) && int.TryParse(range.Groups[2].Value, out to) &&
+                        to >= from && to - from < 256)
+                    {
+                        for (int n = from; n <= to; ++n) choices.Add(new KeyValuePair<string, string>(n.ToString(CultureInfo.InvariantCulture), ""));
+                        continue;
+                    }
+                    int eq = part.IndexOf(" = ", StringComparison.Ordinal);
+                    if (eq > 0) choices.Add(new KeyValuePair<string, string>(part.Substring(0, eq).Trim(), part.Substring(eq + 3).Trim()));
+                    else choices.Add(new KeyValuePair<string, string>(part, ""));
+                }
+                return choices;
+            }
+        }
+
+        /// How a value shows in the dropdown: "1 = log", or the value alone.
+        public string ChoiceText(string value)
+        {
+            foreach (var choice in Choices)
+                if (choice.Key == value) return choice.Value.Length > 0 ? choice.Key + " = " + choice.Value : choice.Key;
+            return value;
+        }
         public bool Diagnostic { get { return Group == SwitchWalker.DiagnosticsGroup; } }
         public bool Described { get { return Tooltip.Length > 0; } }
     }
@@ -42,8 +83,8 @@ namespace RyGT
         /// Set by the launcher itself from its own settings; changing them here would be overwritten.
         static readonly HashSet<string> LauncherManaged = new HashSet<string>
         {
-            "RYGT_LOG_DIRECTORY", "RYGT_HDD_STREAMING", "RYGT_ANTI_LAG", "RYGT_PATCH", "RYGT_EXPERIMENTAL_SCENE_VIEWPORT",
-            "RYGT_SCENE_WIDTH", "RYGT_SCENE_HEIGHT", "RYGT_LOW_RES_COMPOSITION"
+            "RYGT_LOG_DIRECTORY", "RYGT_HDD_STREAMING", "SHADGT_ANTI_LAG", "SHADGT_PATCH", "SHADGT_EXPERIMENTAL_SCENE_VIEWPORT",
+            "SHADGT_SCENE_WIDTH", "SHADGT_SCENE_HEIGHT", "SHADGT_LOW_RES_COMPOSITION"
         };
 
         static readonly string[] GroupOrder =
@@ -110,7 +151,7 @@ namespace RyGT
                 // Strings may follow other data directly (the compiler packs them), so only a name
                 // character right before rules a match out.
                 if ((data[i] != (byte)'R' && data[i] != (byte)'S') || (i > 0 && IsNameByte(data[i - 1]))) continue;
-                if (!StartsWith(data, i, "RYGT") && !StartsWith(data, i, "SHADGT_")) continue;
+                if (!StartsWith(data, i, "RYGT") && !StartsWith(data, i, "SHADGT_") && !StartsWith(data, i, "SHARED_")) continue;
                 int end = i;
                 while (end < data.Length && data[end] != 0 && end - i < 4096) ++end;
                 if (end >= data.Length || data[end] != 0) continue;
@@ -143,8 +184,110 @@ namespace RyGT
             return list.OrderBy(s => order(s.Group)).ThenBy(s => s.Group, StringComparer.Ordinal).ThenBy(s => s.Name, StringComparer.Ordinal).ToList();
         }
 
-        /// The prefixes of the renderer's switches: RYGT_ (ryGT's) and SHADGT_ (shadGT's, FEAT-GTS-443).
-        static readonly string[] NamePrefixes = { "RYGT_", "SHADGT_" };
+        /// The prefixes of the switches (FEAT-GTS-275): SHADGT_ for the renderer's, RYGT_ for the runtime's,
+        /// SHARED_ for those both read.
+        public static readonly string[] NamePrefixes = { "SHADGT_", "RYGT_", "SHARED_" };
+
+        /// FEAT-GTS-275: saved entries the installed build no longer reads, but reads under another of the
+        /// prefixes (RYGT_PARALLEL_WORKERS, now SHADGT_PARALLEL_WORKERS), as old name -> new name. An
+        /// entry whose new name is saved too is left out: that one is used.
+        public static List<KeyValuePair<string, string>> FindRenames(IEnumerable<EnvVar> env, ICollection<string> known)
+        {
+            var renames = new List<KeyValuePair<string, string>>();
+            var names = new HashSet<string>(env.Select(e => e.Name), StringComparer.Ordinal);
+            foreach (var entry in env)
+            {
+                if (known.Contains(entry.Name)) continue;
+                int cut = entry.Name.IndexOf('_');
+                if (cut < 0 || Array.IndexOf(NamePrefixes, entry.Name.Substring(0, cut + 1)) < 0) continue;
+                string tail = entry.Name.Substring(cut + 1);
+                foreach (var prefix in NamePrefixes)
+                {
+                    string renamed = prefix + tail;
+                    if (renamed == entry.Name || !known.Contains(renamed) || names.Contains(renamed)) continue;
+                    names.Add(renamed);
+                    renames.Add(new KeyValuePair<string, string>(entry.Name, renamed));
+                    break;
+                }
+            }
+            return renames;
+        }
+
+        /// Gives the entries of `env` named in `renames` their new name; how many were renamed.
+        public static int Rename(List<EnvVar> env, IEnumerable<KeyValuePair<string, string>> renames)
+        {
+            int renamed = 0;
+            var names = new HashSet<string>(env.Select(e => e.Name), StringComparer.Ordinal);
+            foreach (var pair in renames)
+            {
+                if (names.Contains(pair.Value)) continue;
+                var entry = env.FirstOrDefault(e => e.Name == pair.Key);
+                if (entry == null) continue;
+                names.Remove(entry.Name);
+                names.Add(pair.Value);
+                entry.Name = pair.Value;
+                ++renamed;
+            }
+            return renamed;
+        }
+
+        /// Whether any saved entry is named like a switch (so the modules are worth reading).
+        public static bool HasSwitchNames(IEnumerable<EnvVar> env)
+        {
+            return env.Any(e => NamePrefixes.Any(p => e.Name.StartsWith(p, StringComparison.Ordinal)));
+        }
+
+        static string knownStamp;
+        static HashSet<string> knownNames;
+        static readonly object knownLock = new object();
+
+        /// The switch names the installed build reads (the renderer and the runtime modules), read
+        /// again only when a module changed (sizes and times). Empty when the modules can't be read.
+        public static HashSet<string> KnownNames(string root)
+        {
+            lock (knownLock)
+            {
+                try
+                {
+                    string libs = Path.GetDirectoryName(Path.Combine(root, RendererFile));
+                    var stamp = new StringBuilder();
+                    foreach (var file in Directory.GetFiles(libs, "*.prx").OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+                    {
+                        var info = new FileInfo(file);
+                        stamp.Append(info.Name).Append(':').Append(info.Length).Append(':').Append(info.LastWriteTimeUtc.Ticks).Append(';');
+                    }
+                    if (knownNames == null || knownStamp != stamp.ToString())
+                    {
+                        knownNames = new HashSet<string>(WalkAll(root).Select(s => s.Name), StringComparer.Ordinal);
+                        knownStamp = stamp.ToString();
+                    }
+                    return knownNames;
+                }
+                catch { return new HashSet<string>(); }
+            }
+        }
+
+        /// FEAT-GTS-277: the renderer's git describe ("gt7-2026-10-31-752-g817ddb6d"), from its
+        /// "RYGTREV1|describe|commit" string; null for a build without one.
+        public static string RendererDescription(string root)
+        {
+            try
+            {
+                byte[] data = File.ReadAllBytes(Path.Combine(root, RendererFile));
+                byte[] tag = Encoding.ASCII.GetBytes("RYGTREV1|");
+                for (int i = 0; i + tag.Length < data.Length; ++i)
+                {
+                    if (data[i] != tag[0] || !StartsWith(data, i, "RYGTREV1|")) continue;
+                    int end = i;
+                    while (end < data.Length && data[end] != 0 && end - i < 512) ++end;
+                    var fields = Encoding.ASCII.GetString(data, i, end - i).Split('|');
+                    if (fields.Length >= 3 && fields[1].Length > 0) return fields[1];
+                    if (fields.Length >= 3 && fields[2].Length >= 8) return fields[2].Substring(0, 8);
+                }
+            }
+            catch { }
+            return null;
+        }
 
         static bool IsSwitchName(string text)
         {
@@ -309,6 +452,13 @@ namespace RyGT
         }
     }
 
+    /// FEAT-GTS-276: one entry of a choice switch's dropdown.
+    sealed class ChoiceItem
+    {
+        public string Value { get; set; }
+        public string Text { get; set; }
+    }
+
     sealed class RowComparer : System.Collections.IComparer
     {
         readonly Comparison<DataGridViewRow> compare;
@@ -334,8 +484,8 @@ namespace RyGT
             public HashSet<string> Expanded = new HashSet<string>(); // FEAT-GTS-274: the open families
         }
 
-        /// FEAT-GTS-274: switches of one group whose names share their first two words (RYGT_PARALLEL_*),
-        /// shown under one row. Switch is the switch named after the family (RYGT_NATIVE), if the group
+        /// FEAT-GTS-274: switches of one group whose names share their first two words (SHADGT_PARALLEL_*),
+        /// shown under one row. Switch is the switch named after the family (SHADGT_NATIVE), if the group
         /// has one: then that switch is the family's row.
         sealed class SwitchFamily
         {
@@ -346,7 +496,26 @@ namespace RyGT
             public readonly List<DataGridViewRow> Children = new List<DataGridViewRow>();
         }
 
-        /// The first two words of a switch name with more after them (RYGT_PARALLEL_X -> RYGT_PARALLEL).
+        /// FEAT-GTS-277: the header rows, in this order: the renderer's switches, the shared ones, the runtime's.
+        static readonly string[] SectionOrder = { "SHADGT_", "SHARED_", "RYGT_" };
+        /// How far the group subheaders, and the switches under them, sit right of their section's header.
+        const int SectionIndent = 12, SwitchIndent = 24;
+
+        static string SectionOf(string name)
+        {
+            foreach (var prefix in SectionOrder)
+                if (name.StartsWith(prefix, StringComparison.Ordinal)) return prefix;
+            return "RYGT_";
+        }
+
+        static string SectionTitle(string prefix)
+        {
+            return prefix == "SHADGT_" ? "Renderer"
+                 : prefix == "SHARED_" ? "Renderer and runtime"
+                 : "Runtime";
+        }
+
+        /// The first two words of a switch name with more after them (SHADGT_PARALLEL_X -> SHADGT_PARALLEL).
         static string FamilyPrefix(string name)
         {
             var parts = name.Split('_');
@@ -373,7 +542,10 @@ namespace RyGT
             string rendererDate = "";
             try
             {
-                if (File.Exists(rendererPath))
+                // FEAT-GTS-277: the renderer's git describe; the file's date for a build without one.
+                string described = SwitchWalker.RendererDescription(root);
+                if (described != null) rendererDate = " \u00B7 renderer " + described;
+                else if (File.Exists(rendererPath))
                     rendererDate = " \u00B7 renderer from " + File.GetLastWriteTime(rendererPath).ToString("MM-dd HH:mm", CultureInfo.InvariantCulture);
             }
             catch { }
@@ -510,16 +682,28 @@ namespace RyGT
             grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "default", HeaderText = "When not set", ReadOnly = true, FillWeight = 38, AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, SortMode = DataGridViewColumnSortMode.Programmatic });
             grid.Columns[2].DefaultCellStyle.ForeColor = Dark.DimText;
             grid.Columns[0].DefaultCellStyle.Font = new Font("Consolas", 9f);
+            // The section headers stick out to the left of the groups and switches under them.
+            grid.Columns[0].DefaultCellStyle.Padding = new Padding(SwitchIndent, 0, 0, 0);
             grid.Columns[1].DefaultCellStyle.Padding = new Padding(9, 5, 9, 5); // the editor inside the drawn box
 
             var headingStyle = new DataGridViewCellStyle
             {
+                Padding = new Padding(SectionIndent, 0, 0, 0), // between the section header and its switches
                 BackColor = Dark.Button, SelectionBackColor = Dark.Button, ForeColor = Dark.Text, SelectionForeColor = Dark.Text,
                 Font = new Font("Segoe UI Semibold", 9f)
             };
             var rowSwitch = new Dictionary<DataGridViewRow, RendererSwitch>();
             var headings = new List<KeyValuePair<DataGridViewRow, string>>();
-            // FEAT-GTS-274: switches of a group whose names share their first two words (RYGT_PARALLEL_*) are
+            // FEAT-GTS-277: a header row per prefix, over that prefix's groups: the renderer's switches, the
+            // ones both read, then the runtime's.
+            var sections = new List<KeyValuePair<DataGridViewRow, string>>();
+            var sectionStyle = new DataGridViewCellStyle
+            {
+                BackColor = Dark.Field, SelectionBackColor = Dark.Field, ForeColor = Color.White, SelectionForeColor = Color.White,
+                Font = new Font("Segoe UI Semibold", 10f, FontStyle.Italic),
+                Padding = new Padding(1, 0, 0, 0) // not Empty, which would take the column's indent
+            };
+            // FEAT-GTS-274: switches of a group whose names share their first two words (SHADGT_PARALLEL_*) are
             // one family row, closed at first, instead of scattered through hundreds of rows.
             var families = new Dictionary<DataGridViewRow, SwitchFamily>(); // the family rows
             var familyOf = new Dictionary<DataGridViewRow, SwitchFamily>(); // the switches in a family
@@ -534,6 +718,19 @@ namespace RyGT
                 string current;
                 values.TryGetValue(sw.Name, out current);
                 // An on/off switch is a toggle (clicked, not typed into); the cell holds "1", "0" or "".
+                if (sw.IsChoice)
+                {
+                    // FEAT-GTS-276: a fixed set of values: a dropdown, Default (not set) first. A saved value
+                    // the list does not have stays offered, so it is not lost.
+                    var items = new List<ChoiceItem> { new ChoiceItem { Value = "", Text = "Default" + (sw.Default.Length > 0 ? " (" + sw.Default + ")" : "") } };
+                    foreach (var choice in sw.Choices) items.Add(new ChoiceItem { Value = choice.Key, Text = sw.ChoiceText(choice.Key) });
+                    if (current != null && !sw.Choices.Any(c => c.Key == current)) items.Add(new ChoiceItem { Value = current, Text = current + "  (not in the list)" });
+                    row.Cells[1] = new DataGridViewComboBoxCell
+                    {
+                        DataSource = items, ValueMember = "Value", DisplayMember = "Text", FlatStyle = FlatStyle.Flat,
+                        DisplayStyle = DataGridViewComboBoxDisplayStyle.Nothing
+                    };
+                }
                 row.Cells[1].Value = current ?? "";
                 row.Cells[1].ReadOnly = sw.IsFlag;
                 string tip = Tip(sw);
@@ -541,16 +738,30 @@ namespace RyGT
                 Mark(row, current != null);
                 return row;
             };
-            foreach (var groupName in catalog.Select(c => c.Group).Distinct().ToList())
+            string lastSection = null;
+            var parts = catalog.Select(c => new { Section = SectionOf(c.Name), Group = c.Group }).Distinct()
+                               .OrderBy(x => Array.IndexOf(SectionOrder, x.Section)).ToList(); // stable: the groups keep their order
+            foreach (var part in parts)
             {
-                string group = groupName;
-                var members = catalog.Where(c => c.Group == group).ToList();
+                string section = part.Section, group = part.Group;
+                if (section != lastSection)
+                {
+                    lastSection = section;
+                    int at = grid.Rows.Add(SectionTitle(section), "", "");
+                    var header = grid.Rows[at];
+                    header.Tag = at;
+                    header.ReadOnly = true;
+                    header.DefaultCellStyle = sectionStyle;
+                    header.Height = 32;
+                    sections.Add(new KeyValuePair<DataGridViewRow, string>(header, section));
+                }
+                var members = catalog.Where(c => c.Group == group && SectionOf(c.Name) == section).ToList();
                 int h = grid.Rows.Add(group, "", "");
                 grid.Rows[h].Tag = h;
                 var heading = grid.Rows[h];
                 heading.ReadOnly = true;
                 heading.DefaultCellStyle = headingStyle;
-                headings.Add(new KeyValuePair<DataGridViewRow, string>(heading, group));
+                headings.Add(new KeyValuePair<DataGridViewRow, string>(heading, section + group));
                 var familyNames = new HashSet<string>(members.Select(c => FamilyPrefix(c.Name)).Where(f => f != null)
                                                              .GroupBy(f => f).Where(f => f.Count() >= 2).Select(f => f.Key));
                 var placed = new HashSet<string>();
@@ -573,7 +784,7 @@ namespace RyGT
                     }
                     else
                     {
-                        int f = grid.Rows.Add(key + "_*", "", "");
+                        int f = grid.Rows.Add(key, "", "");
                         family.Row = grid.Rows[f];
                         family.Row.Tag = f;
                         family.Row.ReadOnly = true;
@@ -619,7 +830,7 @@ namespace RyGT
                     bool visible = (showDiagnostics.Checked || !s.Diagnostic || changed) && (!onlyChanged.Checked || changed) &&
                                    (text.Length == 0 || s.Name.IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0 ||
                                     s.Tooltip.IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0);
-                    if (visible) { matched.Add(pair.Key); ++shown; visibleGroups.Add(s.Group); }
+                    if (visible) { matched.Add(pair.Key); ++shown; visibleGroups.Add(SectionOf(s.Name) + s.Group); visibleGroups.Add(SectionOf(s.Name)); }
                 }
                 // FEAT-GTS-274: a family's switches show while it is open (or searched, filtered or sorted);
                 // its row shows while any of them (or its own switch) matches.
@@ -634,9 +845,10 @@ namespace RyGT
                 foreach (var family in families.Values)
                     if (family.Switch == null) family.Row.Visible = sortColumn < 0 && family.Children.Any(matched.Contains);
                 foreach (var heading in headings) heading.Key.Visible = sortColumn < 0 && visibleGroups.Contains(heading.Value);
+                foreach (var header in sections) header.Key.Visible = sortColumn < 0 && visibleGroups.Contains(header.Value);
                 grid.ResumeLayout();
                 count.Text = walkError != null ? "Could not read " + SwitchWalker.RendererFile + ": " + walkError
-                           : catalog.Count == 0 ? "No RYGT_ or SHADGT_ switches found in " + SwitchWalker.RendererFile
+                           : catalog.Count == 0 ? "No SHADGT_, RYGT_ or SHARED_ switches found in " + SwitchWalker.RendererFile
                            : shown + " of " + catalog.Count + " switches, " + values.Count + " changed" + rendererDate;
                 lastShown = shown;
             };
@@ -709,7 +921,7 @@ namespace RyGT
             // Every setting looks like what it is: an on/off switch as a toggle, any other switch (a number,
             // a mask, a name) as a text box, with the default in grey when empty.
             grid.RowTemplate.Height = 26;
-            foreach (DataGridViewRow row in grid.Rows) row.Height = 26;
+            foreach (DataGridViewRow row in grid.Rows) row.Height = sections.Any(x => x.Key == row) ? 32 : 26;
             grid.CellPainting += (sender, e) =>
             {
                 if (e.RowIndex < 0 || e.ColumnIndex != 1) return;
@@ -735,6 +947,15 @@ namespace RyGT
                 string text = Convert.ToString(e.FormattedValue) ?? "";
                 bool placeholder = false;
                 var textArea = new Rectangle(box.X + 6, box.Y, box.Width - 12, box.Height);
+                if (s.IsChoice)
+                {
+                    // FEAT-GTS-276: the dropdown's arrow at the right; the text is the value and its meaning.
+                    string raw = Convert.ToString(e.Value) ?? "";
+                    text = raw.Length == 0 ? "" : s.ChoiceText(raw);
+                    var arrow = new Rectangle(box.Right - 18, box.Y, 14, box.Height);
+                    TextRenderer.DrawText(g, "\u25BE", grid.Font, arrow, Dark.DimText, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                    textArea.Width -= 16;
+                }
                 if (text.Length == 0)
                 {
                     text = s.Described && s.Default.Length > 0 ? s.Default : "value";
@@ -756,9 +977,9 @@ namespace RyGT
                 var b = e.CellBounds;
                 const TextFormatFlags line = TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine |
                                              TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding;
-                TextRenderer.DrawText(g, isOpen(family) ? "\u25BE" : "\u25B8", grid.Font, new Rectangle(b.X + 5, b.Y, 14, b.Height), Dark.DimText, line);
-                string name = family.Switch != null ? family.Switch.Name : family.Prefix + "_*";
-                int x = b.X + 21;
+                TextRenderer.DrawText(g, isOpen(family) ? "\u25BE" : "\u25B8", grid.Font, new Rectangle(b.X + SwitchIndent + 3, b.Y, 14, b.Height), Dark.DimText, line);
+                string name = family.Switch != null ? family.Switch.Name : family.Prefix;
+                int x = b.X + SwitchIndent + 19;
                 var nameArea = new Rectangle(x, b.Y, Math.Max(0, b.Right - x - 4), b.Height);
                 TextRenderer.DrawText(g, name, e.CellStyle.Font, nameArea, e.CellStyle.ForeColor, line | TextFormatFlags.EndEllipsis);
                 x += TextRenderer.MeasureText(g, name, e.CellStyle.Font, nameArea.Size, line).Width + 10;
@@ -772,7 +993,7 @@ namespace RyGT
             grid.CellFormatting += (sender, e) =>
             {
                 if (e.ColumnIndex == 0 && e.RowIndex >= 0 && sortColumn < 0 && familyOf.ContainsKey(grid.Rows[e.RowIndex]))
-                    e.CellStyle.Padding = new Padding(22, 0, 0, 0);
+                    e.CellStyle.Padding = new Padding(SwitchIndent + 22, 0, 0, 0);
             };
             // The editor sits inside the same box.
             grid.EditingControlShowing += (sender, e) =>
@@ -781,6 +1002,20 @@ namespace RyGT
                 e.Control.ForeColor = Dark.Text;
                 var text = e.Control as TextBox;
                 if (text != null) text.BorderStyle = BorderStyle.None;
+                var list = e.Control as ComboBox;
+                if (list != null) list.FlatStyle = FlatStyle.Flat; // FEAT-GTS-276
+            };
+            // FEAT-GTS-276: a picked value is saved at once, not when the cell is left.
+            grid.CurrentCellDirtyStateChanged += delegate
+            {
+                if (grid.IsCurrentCellDirty && grid.CurrentCell is DataGridViewComboBoxCell) grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+            };
+            grid.CellClick += (sender, e) =>
+            {
+                if (e.RowIndex < 0 || e.ColumnIndex != 1 || !(grid.Rows[e.RowIndex].Cells[1] is DataGridViewComboBoxCell)) return;
+                if (!grid.IsCurrentCellInEditMode) grid.BeginEdit(false);
+                var list = grid.EditingControl as ComboBox;
+                if (list != null) list.DroppedDown = true;
             };
             // Clicking a toggle (or Space on it) flips it. Flipping back to the default state clears the
             // setting, so only real changes are saved.
@@ -998,6 +1233,8 @@ namespace RyGT
                 if (grid.IsCurrentCellInEditMode) grid.EndEdit();
                 var entries = Profiles.Read(Profiles.PathOf(profileDir, name));
                 if (entries == null) { MessageBox.Show(page.FindForm(), "Could not read the profile \"" + name + "\"."); return; }
+                // FEAT-GTS-275: a profile saved before the switches were renamed loads with the new names.
+                SwitchWalker.Rename(entries, SwitchWalker.FindRenames(entries, known));
                 if (savedEnv.Count > 0 &&
                     MessageBox.Show(page.FindForm(), "Replace the current " + savedEnv.Count + (savedEnv.Count == 1 ? " setting" : " settings") +
                                     " with the profile \"" + name + "\" (" + entries.Count + ")?", "Load profile",
@@ -1092,6 +1329,7 @@ namespace RyGT
                 case "int": return "a whole number";
                 case "hex": return "a hexadecimal number such as 0xFFFF0000";
                 case "float": return "a number such as 1.5";
+                case "choice": return "one of the listed values";
                 default: return "letters and digits";
             }
         }
@@ -1108,6 +1346,7 @@ namespace RyGT
                     return hex.Length > 0 && ulong.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out u) ||
                            long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out l);
                 case "float": return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out d);
+                case "choice": return !s.IsChoice || s.Choices.Any(c => c.Key == value);
                 default: return true;
             }
         }
@@ -1119,7 +1358,13 @@ namespace RyGT
                 return Wrap(s.Name + " is read by this renderer build (" + SwitchWalker.RendererFile + ") but has no description in it. " +
                             "Most switches take 1 to turn on and 0 to turn off.", 72);
             var text = new StringBuilder(Wrap(s.Tooltip, 72));
-            if (s.Values.Length > 0) text.Append("\n\nValues: ").Append(Wrap(s.Values, 64));
+            if (s.IsChoice)
+            {
+                text.Append("\n\nValues:");
+                foreach (var choice in s.Choices.Take(12)) text.Append("\n  ").Append(Wrap(s.ChoiceText(choice.Key), 64));
+                if (s.Choices.Count > 12) text.Append("\n  ... (" + s.Choices.Count + " in all)");
+            }
+            else if (s.Values.Length > 0) text.Append("\n\nValues: ").Append(Wrap(s.Values, 64));
             if (s.Default.Length > 0) text.Append("\nWhen not set: ").Append(Wrap(s.Default, 60));
             if (s.Diagnostic) text.Append("\n\nDiagnosis only: adds logging or dumps.");
             return text.ToString();

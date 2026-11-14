@@ -10,7 +10,7 @@ are retired after the existing lifetime checks. This is a headroom target, not a
 hard limit on textures, driver allocations or whole-process memory.
 
 Compiler and draw-preparation fixes are unconditional production behavior. The old
-RYGT_CPU_COMPILE_MASK and RYGT_DRAW_PREP_MASK environment variables no longer turn
+SHADGT_CPU_COMPILE_MASK and SHADGT_DRAW_PREP_MASK environment variables no longer turn
 them off. Shader precompilation remains controlled by its launcher checkbox and is
 available with both RAM profiles. The 16 GB profile enables persistent pipeline
 caching and keeps the smaller image-recycle budget; existing disabled cache settings

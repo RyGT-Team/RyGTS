@@ -7,8 +7,8 @@ The Native renderer can bind constants through existing buffer descriptors inste
 These changes remain opt-in. Set both environment variables before starting the game:
 
 ```powershell
-$env:RYGT_COMPOSITION_BUFFER_DESCRIPTORS = '1'
-$env:RYGT_POSTPROCESS_BUFFER_DESCRIPTORS = '1'
+$env:SHADGT_COMPOSITION_BUFFER_DESCRIPTORS = '1'
+$env:SHADGT_POSTPROCESS_BUFFER_DESCRIPTORS = '1'
 ```
 
 The first selects fragment program `b33ec4df`; the second selects read-only buffers in fragment programs `184b619c` and `7cd92fb8`. Other shaders and compute stages retain existing behavior. Unset the variables or set them to `0` to restore the original paths. No launcher option is added by this patch.

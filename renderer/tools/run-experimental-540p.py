@@ -39,18 +39,18 @@ if os.name == 'nt' and 'gtsport.exe' in subprocess.check_output(
  ['tasklist.exe','/FI','IMAGENAME eq GTSport.exe','/FO','CSV','/NH'],text=True).lower():
  raise SystemExit('Close the running game before starting this comparison')
 env = os.environ.copy()
-if env.get('RYGT_PATCH'):
- raise SystemExit('Unset RYGT_PATCH before this controlled experiment')
-env['RYGT_PATCH'] = ','.join('%x:%s:%s'%p for p in patches)
-env['RYGT_NATIVE'] = '1'
-env['RYGT_EXPERIMENTAL_SCENE_VIEWPORT'] = '1'
+if env.get('SHADGT_PATCH'):
+ raise SystemExit('Unset SHADGT_PATCH before this controlled experiment')
+env['SHADGT_PATCH'] = ','.join('%x:%s:%s'%p for p in patches)
+env['SHADGT_NATIVE'] = '1'
+env['SHADGT_EXPERIMENTAL_SCENE_VIEWPORT'] = '1'
 # Preserve the measured validated performance setup; exclude rejected experiments.
-env['RYGT_COMPOSITION_BUFFER_DESCRIPTORS'] = '1'
-env['RYGT_POSTPROCESS_BUFFER_DESCRIPTORS'] = '1'
-env['RYGT_COMPUTE_PREFIX_DESCRIPTOR'] = '1'
+env['SHADGT_COMPOSITION_BUFFER_DESCRIPTORS'] = '1'
+env['SHADGT_POSTPROCESS_BUFFER_DESCRIPTORS'] = '1'
+env['SHADGT_COMPUTE_PREFIX_DESCRIPTOR'] = '1'
 for key in ('RYGT_COMPUTE_BUFFER_DESCRIPTORS','RYGT_MATERIAL_BUFFER_DESCRIPTORS','RYGT_COMPUTE_PREFIX_ALL'):
  env.pop(key, None)
-if args.low_composition: env['RYGT_LOW_RES_COMPOSITION'] = '1'
-else: env.pop('RYGT_LOW_RES_COMPOSITION', None)
+if args.low_composition: env['SHADGT_LOW_RES_COMPOSITION'] = '1'
+else: env.pop('SHADGT_LOW_RES_COMPOSITION', None)
 process = subprocess.Popen([str(exe)],cwd=root,env=env)
 print('Started experimental 540p scene / 1080p output; PID',process.pid)

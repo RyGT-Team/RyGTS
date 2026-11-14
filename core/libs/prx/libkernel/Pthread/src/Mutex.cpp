@@ -121,7 +121,7 @@ int acquireMutex(PthreadMutex mutex, TAcquire acquire, int unavailable, bool try
     }
     if (owned && mutex->_count == std::numeric_limits<int>::max())
         throw std::overflow_error("Recursive mutex lock count overflow");
-    // RYGT_DIAG: a lock that is not free at once is timed as a contended wait.
+    // SHARED_DIAG: a lock that is not free at once is timed as a contended wait.
     const auto timedAcquire = [&](auto& native) {
         if (tryOnly || !KernelDiagEnabled() || native.try_lock())
             return tryOnly || !KernelDiagEnabled() ? acquire(native) : true;

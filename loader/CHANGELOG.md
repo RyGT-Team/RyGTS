@@ -6,6 +6,21 @@ The version lives in `loader/Version.cs`. To release a change, bump
 `LauncherVersion.Value` there and add a section here with the same number;
 CI fails when the two disagree.
 
+## 0.1.7 - 2026-11-13
+
+* FEAT-GTS-277: The Advanced page splits the switches under a header row per prefix: Renderer (SHADGT_),
+  Renderer and runtime (SHARED_), Runtime (RYGT_), each over its groups. Its count line names the
+  renderer build by its git describe (shadGT FEAT-GTS-417) instead of the file's date, which stays for older builds.
+* FEAT-GTS-276: On the Advanced page, a switch that takes only a fixed set of values (kind `choice` in
+  the renderer's table, shadGT FEAT-GTS-416) is a dropdown instead of a text box where other values were
+  ignored: Default, then each value with its meaning. It is saved as soon as a value is picked.
+* FEAT-GTS-275: Switches are named after where they take effect: SHADGT_ for the renderer, RYGT_ for
+  the runtime, SHARED_ for both (shadGT FEAT-GTS-415). The launcher sets and lists the new names (the
+  Advanced page also finds SHARED_ switches). At start, switches saved under an old name the
+  installed build no longer reads are listed in the obsolete-settings question ("Update obsolete
+  settings?"): Yes renames them, No keeps them. A profile saved before loads with the new names.
+  Family rows show the family's name without "_*".
+
 ## 0.1.6 - 2026-11-13
 
 * FEAT-GTS-274: On the Advanced page, switches of a group whose names share their first two words
