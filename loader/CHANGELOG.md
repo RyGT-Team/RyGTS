@@ -6,6 +6,16 @@ The version lives in `loader/Version.cs`. To release a change, bump
 `LauncherVersion.Value` there and add a section here with the same number;
 CI fails when the two disagree.
 
+## 0.1.6 - 2026-11-13
+
+* FEAT-GTS-274: On the Advanced page, switches of a group whose names share their first two words
+  (RYGT_PARALLEL_*, RYGT_NATIVE_*, SHADGT_DIAG_*, ...) sit under one family row, closed at first,
+  instead of scattered through the list. The row shows how many switches it holds and how many are
+  changed; a click anywhere on it opens or closes it, except on the row's own switch when the
+  family is named after one (RYGT_NATIVE), which still flips as usual. Right and Left open and
+  close it from the keyboard. Searching or "Only changed" opens the families with a match, and a
+  column sort lists every switch flat.
+
 ## 0.1.5 - 2026-11-13
 
 * FEAT-GTS-273: Settings > About shows the copyright notice ("Copyright © 2026 RyGT-Team.") and
