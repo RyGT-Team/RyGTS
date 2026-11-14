@@ -6,6 +6,15 @@ The version lives in `loader/Version.cs`. To release a change, bump
 `LauncherVersion.Value` there and add a section here with the same number;
 CI fails when the two disagree.
 
+## 0.1.8 - 2026-11-13
+
+* FEAT-GTS-280: Controls has a new HD rumble & adaptive triggers window (it replaces the Trigger strength
+  slider, which moved into it). A slider per effect, 0-200% with 0 turning it off: HD rumble overall, engine,
+  road and kerbs, wheel slip, gear changes, rev limiter and impacts; trigger strength, brake and accelerator
+  resistance, how much the resistance follows speed, braking and revs, ABS (wheel-lock) and wheelspin
+  vibration. Changes apply while playing. Each effect has a Test button that plays it on the DualSense
+  through tools\ryty-feel-test.exe (from the renderer), game running or not.
+
 ## 0.1.7 - 2026-11-13
 
 * FEAT-GTS-277: The Advanced page splits the switches under a header row per prefix: Renderer (SHADGT_),
