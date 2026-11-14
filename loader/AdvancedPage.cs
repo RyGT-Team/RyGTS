@@ -331,6 +331,26 @@ namespace RyGT
             public string Search = "";
             public bool Diagnostics, OnlyChanged;
             public string Profile = ""; // FEAT-GTS-270: the profile picked in the dropdown
+            public HashSet<string> Expanded = new HashSet<string>(); // FEAT-GTS-274: the open families
+        }
+
+        /// FEAT-GTS-274: switches of one group whose names share their first two words (RYGT_PARALLEL_*),
+        /// shown under one row. Switch is the switch named after the family (RYGT_NATIVE), if the group
+        /// has one: then that switch is the family's row.
+        sealed class SwitchFamily
+        {
+            public string Prefix = "", Key = "";
+            public RendererSwitch Switch;
+            public DataGridViewRow Row;
+            public bool Expanded;
+            public readonly List<DataGridViewRow> Children = new List<DataGridViewRow>();
+        }
+
+        /// The first two words of a switch name with more after them (RYGT_PARALLEL_X -> RYGT_PARALLEL).
+        static string FamilyPrefix(string name)
+        {
+            var parts = name.Split('_');
+            return parts.Length >= 3 && parts[0].Length > 0 && parts[1].Length > 0 ? parts[0] + "_" + parts[1] : null;
         }
 
         public static void Build(TableLayoutPanel page, Control title, Color cardFill, string root, List<EnvVar> env, Action<List<EnvVar>> save)
@@ -499,32 +519,75 @@ namespace RyGT
             };
             var rowSwitch = new Dictionary<DataGridViewRow, RendererSwitch>();
             var headings = new List<KeyValuePair<DataGridViewRow, string>>();
+            // FEAT-GTS-274: switches of a group whose names share their first two words (RYGT_PARALLEL_*) are
+            // one family row, closed at first, instead of scattered through hundreds of rows.
+            var families = new Dictionary<DataGridViewRow, SwitchFamily>(); // the family rows
+            var familyOf = new Dictionary<DataGridViewRow, SwitchFamily>(); // the switches in a family
+            var expanded = view != null ? view.Expanded : new HashSet<string>();
             bool loading = true;
-            string group = null;
-            foreach (var s in catalog)
+            Func<RendererSwitch, DataGridViewRow> addSwitch = sw =>
             {
-                if (s.Group != group)
-                {
-                    group = s.Group;
-                    int h = grid.Rows.Add(group, "", "");
-                    grid.Rows[h].Tag = h;
-                    var heading = grid.Rows[h];
-                    heading.ReadOnly = true;
-                    heading.DefaultCellStyle = headingStyle;
-                    headings.Add(new KeyValuePair<DataGridViewRow, string>(heading, group));
-                }
-                int index = grid.Rows.Add(s.Name, "", s.Default);
-                grid.Rows[index].Tag = index;
+                int index = grid.Rows.Add(sw.Name, "", sw.Default);
                 var row = grid.Rows[index];
-                rowSwitch[row] = s;
+                row.Tag = index;
+                rowSwitch[row] = sw;
                 string current;
-                values.TryGetValue(s.Name, out current);
+                values.TryGetValue(sw.Name, out current);
                 // An on/off switch is a toggle (clicked, not typed into); the cell holds "1", "0" or "".
                 row.Cells[1].Value = current ?? "";
-                row.Cells[1].ReadOnly = s.IsFlag;
-                string tip = Tip(s);
+                row.Cells[1].ReadOnly = sw.IsFlag;
+                string tip = Tip(sw);
                 foreach (DataGridViewCell cell in row.Cells) cell.ToolTipText = tip;
                 Mark(row, current != null);
+                return row;
+            };
+            foreach (var groupName in catalog.Select(c => c.Group).Distinct().ToList())
+            {
+                string group = groupName;
+                var members = catalog.Where(c => c.Group == group).ToList();
+                int h = grid.Rows.Add(group, "", "");
+                grid.Rows[h].Tag = h;
+                var heading = grid.Rows[h];
+                heading.ReadOnly = true;
+                heading.DefaultCellStyle = headingStyle;
+                headings.Add(new KeyValuePair<DataGridViewRow, string>(heading, group));
+                var familyNames = new HashSet<string>(members.Select(c => FamilyPrefix(c.Name)).Where(f => f != null)
+                                                             .GroupBy(f => f).Where(f => f.Count() >= 2).Select(f => f.Key));
+                var placed = new HashSet<string>();
+                var standalone = new List<RendererSwitch>(); // after the families
+                foreach (var sw in members)
+                {
+                    string prefix = FamilyPrefix(sw.Name);
+                    string key = prefix != null && familyNames.Contains(prefix) ? prefix : familyNames.Contains(sw.Name) ? sw.Name : null;
+                    if (key == null) { standalone.Add(sw); continue; }
+                    if (!placed.Add(key)) continue; // already under its family's row
+                    var family = new SwitchFamily { Prefix = key, Key = group + "|" + key, Switch = members.FirstOrDefault(c => c.Name == key) };
+                    family.Expanded = expanded.Contains(family.Key);
+                    string familyKey = key;
+                    var children = members.Where(c => c.Name != familyKey && FamilyPrefix(c.Name) == familyKey).ToList();
+                    string more = "Click the row to show or hide its " + children.Count + " " + key + "_ switches.";
+                    if (family.Switch != null)
+                    {
+                        family.Row = addSwitch(family.Switch);
+                        foreach (DataGridViewCell cell in family.Row.Cells) cell.ToolTipText += "\n\n" + Wrap(more, 72);
+                    }
+                    else
+                    {
+                        int f = grid.Rows.Add(key + "_*", "", "");
+                        family.Row = grid.Rows[f];
+                        family.Row.Tag = f;
+                        family.Row.ReadOnly = true;
+                        family.Row.Cells[0].ToolTipText = Wrap(more, 72);
+                    }
+                    families[family.Row] = family;
+                    foreach (var child in children)
+                    {
+                        var row = addSwitch(child);
+                        family.Children.Add(row);
+                        familyOf[row] = family;
+                    }
+                }
+                foreach (var lone in standalone) addSwitch(lone);
             }
             loading = false;
             card.Controls.Add(grid);
@@ -539,6 +602,8 @@ namespace RyGT
             int sortColumn = -1; // -1: grouped (the order the renderer's groups give)
             bool sortDescending = false;
             int lastShown = 0;
+            // FEAT-GTS-274: open by a click, or while the search or "Only changed" narrows the table.
+            Func<SwitchFamily, bool> isOpen = family => family.Expanded || search.Text.Trim().Length > 0 || onlyChanged.Checked;
             Action filter = delegate
             {
                 string text = search.Text.Trim();
@@ -546,6 +611,7 @@ namespace RyGT
                 grid.SuspendLayout();
                 var visibleGroups = new HashSet<string>();
                 if (grid.CurrentCell != null && grid.CurrentCell.RowIndex >= 0) grid.CurrentCell = null;
+                var matched = new HashSet<DataGridViewRow>();
                 foreach (var pair in rowSwitch)
                 {
                     var s = pair.Value;
@@ -553,9 +619,20 @@ namespace RyGT
                     bool visible = (showDiagnostics.Checked || !s.Diagnostic || changed) && (!onlyChanged.Checked || changed) &&
                                    (text.Length == 0 || s.Name.IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0 ||
                                     s.Tooltip.IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0);
-                    pair.Key.Visible = visible;
-                    if (visible) { ++shown; visibleGroups.Add(s.Group); }
+                    if (visible) { matched.Add(pair.Key); ++shown; visibleGroups.Add(s.Group); }
                 }
+                // FEAT-GTS-274: a family's switches show while it is open (or searched, filtered or sorted);
+                // its row shows while any of them (or its own switch) matches.
+                foreach (var pair in rowSwitch)
+                {
+                    SwitchFamily family;
+                    bool visible = matched.Contains(pair.Key);
+                    if (familyOf.TryGetValue(pair.Key, out family)) visible = visible && (sortColumn >= 0 || isOpen(family));
+                    else if (sortColumn < 0 && families.TryGetValue(pair.Key, out family)) visible = visible || family.Children.Any(matched.Contains);
+                    pair.Key.Visible = visible;
+                }
+                foreach (var family in families.Values)
+                    if (family.Switch == null) family.Row.Visible = sortColumn < 0 && family.Children.Any(matched.Contains);
                 foreach (var heading in headings) heading.Key.Visible = sortColumn < 0 && visibleGroups.Contains(heading.Value);
                 grid.ResumeLayout();
                 count.Text = walkError != null ? "Could not read " + SwitchWalker.RendererFile + ": " + walkError
@@ -576,6 +653,8 @@ namespace RyGT
                 else values[s.Name] = value;
                 Mark(row, values.ContainsKey(s.Name));
                 store();
+                SwitchFamily owner;
+                if (familyOf.TryGetValue(row, out owner)) grid.InvalidateRow(owner.Row.Index);
                 if (walkError == null && catalog.Count > 0)
                     count.Text = lastShown + " of " + catalog.Count + " switches, " + values.Count + " changed" + rendererDate;
             };
@@ -602,7 +681,7 @@ namespace RyGT
             {
                 if (e.RowIndex == tipRow && tipRow >= 0) return; // another cell of the same row
                 hideTip();
-                if (e.RowIndex < 0 || !rowSwitch.ContainsKey(grid.Rows[e.RowIndex])) return;
+                if (e.RowIndex < 0 || string.IsNullOrEmpty(grid.Rows[e.RowIndex].Cells[0].ToolTipText)) return;
                 pendingRow = e.RowIndex;
                 tipDelay.Start();
             };
@@ -666,6 +745,35 @@ namespace RyGT
                                       TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
                 e.Handled = true;
             };
+            // FEAT-GTS-274: a family row's name cell: an arrow, the name, and how many switches it holds (and
+            // how many are changed); its switches are indented under it.
+            grid.CellPainting += (sender, e) =>
+            {
+                SwitchFamily family;
+                if (e.RowIndex < 0 || e.ColumnIndex != 0 || sortColumn >= 0 || !families.TryGetValue(grid.Rows[e.RowIndex], out family)) return;
+                e.PaintBackground(e.ClipBounds, (e.State & DataGridViewElementStates.Selected) != 0);
+                var g = e.Graphics;
+                var b = e.CellBounds;
+                const TextFormatFlags line = TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine |
+                                             TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding;
+                TextRenderer.DrawText(g, isOpen(family) ? "\u25BE" : "\u25B8", grid.Font, new Rectangle(b.X + 5, b.Y, 14, b.Height), Dark.DimText, line);
+                string name = family.Switch != null ? family.Switch.Name : family.Prefix + "_*";
+                int x = b.X + 21;
+                var nameArea = new Rectangle(x, b.Y, Math.Max(0, b.Right - x - 4), b.Height);
+                TextRenderer.DrawText(g, name, e.CellStyle.Font, nameArea, e.CellStyle.ForeColor, line | TextFormatFlags.EndEllipsis);
+                x += TextRenderer.MeasureText(g, name, e.CellStyle.Font, nameArea.Size, line).Width + 10;
+                int changed = family.Children.Count(r => values.ContainsKey(rowSwitch[r].Name));
+                string summary = family.Children.Count + " switches" + (changed > 0 ? ", " + changed + " changed" : "");
+                if (x < b.Right - 24)
+                    TextRenderer.DrawText(g, summary, grid.Font, new Rectangle(x, b.Y, b.Right - x - 4, b.Height),
+                                          changed > 0 ? Dark.AccentText : Dark.DimText, line | TextFormatFlags.EndEllipsis);
+                e.Handled = true;
+            };
+            grid.CellFormatting += (sender, e) =>
+            {
+                if (e.ColumnIndex == 0 && e.RowIndex >= 0 && sortColumn < 0 && familyOf.ContainsKey(grid.Rows[e.RowIndex]))
+                    e.CellStyle.Padding = new Padding(22, 0, 0, 0);
+            };
             // The editor sits inside the same box.
             grid.EditingControlShowing += (sender, e) =>
             {
@@ -693,12 +801,40 @@ namespace RyGT
                 bool on = !IsOn(now, defaultOn);
                 cell.Value = on == defaultOn ? "" : on ? "1" : "0";
             };
-            grid.CellMouseClick += (sender, e) => { if (e.Button == MouseButtons.Left && e.ColumnIndex == 1) toggle(e.RowIndex); };
-            grid.CellMouseDoubleClick += (sender, e) => { if (e.Button == MouseButtons.Left && e.ColumnIndex == 1) toggle(e.RowIndex); };
+            // FEAT-GTS-274: a click anywhere on a family row opens or closes it, except on the row's own switch
+            // (the toggle's track, or the value box), which works as on any row.
+            Func<DataGridViewCellMouseEventArgs, bool> onSwitch = e =>
+            {
+                if (e.ColumnIndex != 1) return false;
+                var row = grid.Rows[e.RowIndex];
+                if (sortColumn >= 0 || !families.ContainsKey(row)) return true;
+                RendererSwitch s;
+                return rowSwitch.TryGetValue(row, out s) && (!s.IsFlag || (e.X >= 4 && e.X <= 46));
+            };
+            Action<DataGridViewRow> openOrClose = row =>
+            {
+                SwitchFamily family;
+                if (sortColumn >= 0 || !families.TryGetValue(row, out family)) return;
+                if (grid.IsCurrentCellInEditMode) grid.EndEdit();
+                family.Expanded = !family.Expanded;
+                if (family.Expanded) expanded.Add(family.Key); else expanded.Remove(family.Key);
+                filter();
+                if (row.Visible) grid.CurrentCell = row.Cells[0];
+                grid.InvalidateRow(row.Index);
+            };
+            DataGridViewCellMouseEventHandler click = (sender, e) =>
+            {
+                if (e.Button != MouseButtons.Left || e.RowIndex < 0) return;
+                if (onSwitch(e)) toggle(e.RowIndex);
+                else openOrClose(grid.Rows[e.RowIndex]);
+            };
+            grid.CellMouseClick += click;
+            grid.CellMouseDoubleClick += click;
             grid.CellMouseMove += (sender, e) =>
             {
                 RendererSwitch s;
-                bool hand = e.RowIndex >= 0 && e.ColumnIndex == 1 && rowSwitch.TryGetValue(grid.Rows[e.RowIndex], out s) && s.IsFlag;
+                bool family = e.RowIndex >= 0 && sortColumn < 0 && families.ContainsKey(grid.Rows[e.RowIndex]);
+                bool hand = e.RowIndex >= 0 && (family || (e.ColumnIndex == 1 && rowSwitch.TryGetValue(grid.Rows[e.RowIndex], out s) && s.IsFlag));
                 grid.Cursor = hand ? Cursors.Hand : Cursors.Default;
             };
             grid.CellEnter += (sender, e) => { if (e.ColumnIndex == 1) grid.InvalidateCell(e.ColumnIndex, e.RowIndex); };
@@ -707,6 +843,15 @@ namespace RyGT
             grid.KeyDown += (sender, e) =>
             {
                 var cell = grid.CurrentCell;
+                SwitchFamily family;
+                if (cell != null && sortColumn < 0 && !grid.IsCurrentCellInEditMode && families.TryGetValue(grid.Rows[cell.RowIndex], out family) &&
+                    (cell.ColumnIndex != 1 || family.Switch == null) &&
+                    ((e.KeyCode == Keys.Right && !family.Expanded) || (e.KeyCode == Keys.Left && family.Expanded) || e.KeyCode == Keys.Space))
+                {
+                    openOrClose(grid.Rows[cell.RowIndex]); // FEAT-GTS-274
+                    e.Handled = true;
+                    return;
+                }
                 if (cell == null || cell.ColumnIndex != 1 || grid.IsCurrentCellInEditMode || !rowSwitch.ContainsKey(grid.Rows[cell.RowIndex])) return;
                 if (e.KeyCode == Keys.Space && cell.ReadOnly) { toggle(cell.RowIndex); e.Handled = true; return; }
                 if (e.KeyCode != Keys.Delete && e.KeyCode != Keys.Back) return;
@@ -805,7 +950,7 @@ namespace RyGT
             {
                 var keepView = new ViewState
                 {
-                    Search = search.Text, Diagnostics = showDiagnostics.Checked, OnlyChanged = onlyChanged.Checked,
+                    Search = search.Text, Diagnostics = showDiagnostics.Checked, OnlyChanged = onlyChanged.Checked, Expanded = expanded,
                     Profile = profileName ?? ""
                 };
                 var form = page.FindForm();
