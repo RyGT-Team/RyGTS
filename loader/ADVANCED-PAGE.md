@@ -38,6 +38,11 @@ are listed in the obsolete-settings question ("Update obsolete settings?"): Yes 
 keeps them (the game ignores them), "Don't show again" stops the question (`prompt_obsolete=0`).
 A profile saved before the rename gets the new names when it is loaded.
 
+A switch that takes only a fixed set of values (kind `choice` in the renderer's table, shadGT FEAT-GTS-416) is a
+dropdown: Default (not set), then each value with its meaning (`0 = off`, `1 = log`, ...). A value is
+saved as soon as it is picked. A renderer build without `choice` rows shows those switches as text
+boxes, as before (FEAT-GTS-276).
+
 "Diagnostics & tracing" switches are hidden until "Show diagnostics and tracing" is ticked (changed
 ones always show). Search matches names and descriptions; "Only changed" shows what is set; Reset all
 returns every switch to its default. Delete on a setting returns it to the default.

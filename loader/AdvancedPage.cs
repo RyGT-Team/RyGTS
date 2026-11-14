@@ -19,6 +19,47 @@ namespace RyGT
         public string Name = "", Kind = "", Default = "", Values = "", Tooltip = "", Group = "";
 
         public bool IsFlag { get { return Kind == "flag"; } }
+        /// FEAT-GTS-276: a fixed set of values, offered in a dropdown.
+        public bool IsChoice { get { return Kind == "choice" && Choices.Count > 0; } }
+
+        List<KeyValuePair<string, string>> choices;
+
+        /// FEAT-GTS-276: a choice switch's values and what they mean, from the values field: "value" or
+        /// "value = meaning", separated by ";", and "A..B" for every whole number from A to B.
+        public List<KeyValuePair<string, string>> Choices
+        {
+            get
+            {
+                if (choices != null) return choices;
+                choices = new List<KeyValuePair<string, string>>();
+                if (Kind != "choice") return choices;
+                foreach (var raw in Values.Split(';'))
+                {
+                    string part = raw.Trim();
+                    if (part.Length == 0) continue;
+                    var range = System.Text.RegularExpressions.Regex.Match(part, @"^(-?\d+)\.\.(-?\d+)$");
+                    int from, to;
+                    if (range.Success && int.TryParse(range.Groups[1].Value, out from) && int.TryParse(range.Groups[2].Value, out to) &&
+                        to >= from && to - from < 256)
+                    {
+                        for (int n = from; n <= to; ++n) choices.Add(new KeyValuePair<string, string>(n.ToString(CultureInfo.InvariantCulture), ""));
+                        continue;
+                    }
+                    int eq = part.IndexOf(" = ", StringComparison.Ordinal);
+                    if (eq > 0) choices.Add(new KeyValuePair<string, string>(part.Substring(0, eq).Trim(), part.Substring(eq + 3).Trim()));
+                    else choices.Add(new KeyValuePair<string, string>(part, ""));
+                }
+                return choices;
+            }
+        }
+
+        /// How a value shows in the dropdown: "1 = log", or the value alone.
+        public string ChoiceText(string value)
+        {
+            foreach (var choice in Choices)
+                if (choice.Key == value) return choice.Value.Length > 0 ? choice.Key + " = " + choice.Value : choice.Key;
+            return value;
+        }
         public bool Diagnostic { get { return Group == SwitchWalker.DiagnosticsGroup; } }
         public bool Described { get { return Tooltip.Length > 0; } }
     }
@@ -389,6 +430,13 @@ namespace RyGT
         }
     }
 
+    /// FEAT-GTS-276: one entry of a choice switch's dropdown.
+    sealed class ChoiceItem
+    {
+        public string Value { get; set; }
+        public string Text { get; set; }
+    }
+
     sealed class RowComparer : System.Collections.IComparer
     {
         readonly Comparison<DataGridViewRow> compare;
@@ -614,6 +662,19 @@ namespace RyGT
                 string current;
                 values.TryGetValue(sw.Name, out current);
                 // An on/off switch is a toggle (clicked, not typed into); the cell holds "1", "0" or "".
+                if (sw.IsChoice)
+                {
+                    // FEAT-GTS-276: a fixed set of values: a dropdown, Default (not set) first. A saved value
+                    // the list does not have stays offered, so it is not lost.
+                    var items = new List<ChoiceItem> { new ChoiceItem { Value = "", Text = "Default" + (sw.Default.Length > 0 ? " (" + sw.Default + ")" : "") } };
+                    foreach (var choice in sw.Choices) items.Add(new ChoiceItem { Value = choice.Key, Text = sw.ChoiceText(choice.Key) });
+                    if (current != null && !sw.Choices.Any(c => c.Key == current)) items.Add(new ChoiceItem { Value = current, Text = current + "  (not in the list)" });
+                    row.Cells[1] = new DataGridViewComboBoxCell
+                    {
+                        DataSource = items, ValueMember = "Value", DisplayMember = "Text", FlatStyle = FlatStyle.Flat,
+                        DisplayStyle = DataGridViewComboBoxDisplayStyle.Nothing
+                    };
+                }
                 row.Cells[1].Value = current ?? "";
                 row.Cells[1].ReadOnly = sw.IsFlag;
                 string tip = Tip(sw);
@@ -815,6 +876,15 @@ namespace RyGT
                 string text = Convert.ToString(e.FormattedValue) ?? "";
                 bool placeholder = false;
                 var textArea = new Rectangle(box.X + 6, box.Y, box.Width - 12, box.Height);
+                if (s.IsChoice)
+                {
+                    // FEAT-GTS-276: the dropdown's arrow at the right; the text is the value and its meaning.
+                    string raw = Convert.ToString(e.Value) ?? "";
+                    text = raw.Length == 0 ? "" : s.ChoiceText(raw);
+                    var arrow = new Rectangle(box.Right - 18, box.Y, 14, box.Height);
+                    TextRenderer.DrawText(g, "\u25BE", grid.Font, arrow, Dark.DimText, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                    textArea.Width -= 16;
+                }
                 if (text.Length == 0)
                 {
                     text = s.Described && s.Default.Length > 0 ? s.Default : "value";
@@ -861,6 +931,20 @@ namespace RyGT
                 e.Control.ForeColor = Dark.Text;
                 var text = e.Control as TextBox;
                 if (text != null) text.BorderStyle = BorderStyle.None;
+                var list = e.Control as ComboBox;
+                if (list != null) list.FlatStyle = FlatStyle.Flat; // FEAT-GTS-276
+            };
+            // FEAT-GTS-276: a picked value is saved at once, not when the cell is left.
+            grid.CurrentCellDirtyStateChanged += delegate
+            {
+                if (grid.IsCurrentCellDirty && grid.CurrentCell is DataGridViewComboBoxCell) grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+            };
+            grid.CellClick += (sender, e) =>
+            {
+                if (e.RowIndex < 0 || e.ColumnIndex != 1 || !(grid.Rows[e.RowIndex].Cells[1] is DataGridViewComboBoxCell)) return;
+                if (!grid.IsCurrentCellInEditMode) grid.BeginEdit(false);
+                var list = grid.EditingControl as ComboBox;
+                if (list != null) list.DroppedDown = true;
             };
             // Clicking a toggle (or Space on it) flips it. Flipping back to the default state clears the
             // setting, so only real changes are saved.
@@ -1174,6 +1258,7 @@ namespace RyGT
                 case "int": return "a whole number";
                 case "hex": return "a hexadecimal number such as 0xFFFF0000";
                 case "float": return "a number such as 1.5";
+                case "choice": return "one of the listed values";
                 default: return "letters and digits";
             }
         }
@@ -1190,6 +1275,7 @@ namespace RyGT
                     return hex.Length > 0 && ulong.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out u) ||
                            long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out l);
                 case "float": return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out d);
+                case "choice": return !s.IsChoice || s.Choices.Any(c => c.Key == value);
                 default: return true;
             }
         }
@@ -1201,7 +1287,13 @@ namespace RyGT
                 return Wrap(s.Name + " is read by this renderer build (" + SwitchWalker.RendererFile + ") but has no description in it. " +
                             "Most switches take 1 to turn on and 0 to turn off.", 72);
             var text = new StringBuilder(Wrap(s.Tooltip, 72));
-            if (s.Values.Length > 0) text.Append("\n\nValues: ").Append(Wrap(s.Values, 64));
+            if (s.IsChoice)
+            {
+                text.Append("\n\nValues:");
+                foreach (var choice in s.Choices.Take(12)) text.Append("\n  ").Append(Wrap(s.ChoiceText(choice.Key), 64));
+                if (s.Choices.Count > 12) text.Append("\n  ... (" + s.Choices.Count + " in all)");
+            }
+            else if (s.Values.Length > 0) text.Append("\n\nValues: ").Append(Wrap(s.Values, 64));
             if (s.Default.Length > 0) text.Append("\nWhen not set: ").Append(Wrap(s.Default, 60));
             if (s.Diagnostic) text.Append("\n\nDiagnosis only: adds logging or dumps.");
             return text.ToString();
