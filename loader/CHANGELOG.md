@@ -6,6 +6,15 @@ The version lives in `loader/Version.cs`. To release a change, bump
 `LauncherVersion.Value` there and add a section here with the same number;
 CI fails when the two disagree.
 
+## 0.1.7 - 2026-11-13
+
+* FEAT-GTS-275: Switches are named after where they take effect: SHADGT_ for the renderer, RYGT_ for
+  the runtime, SHARED_ for both (shadGT FEAT-GTS-415). The launcher sets and lists the new names (the
+  Advanced page also finds SHARED_ switches). At start, switches saved under an old name the
+  installed build no longer reads are listed in the obsolete-settings question ("Update obsolete
+  settings?"): Yes renames them, No keeps them. A profile saved before loads with the new names.
+  Family rows show the family's name without "_*".
+
 ## 0.1.6 - 2026-11-13
 
 * FEAT-GTS-274: On the Advanced page, switches of a group whose names share their first two words

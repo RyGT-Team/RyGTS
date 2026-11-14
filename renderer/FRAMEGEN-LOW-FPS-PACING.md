@@ -1,6 +1,6 @@
 # Experimental low-FPS pacing workaround
 
-Patch 0097 is off by default. Set `RYGT_FG_LOW_FPS_PACING=1` in the launcher's environment before starting the game to test it.
+Patch 0097 is off by default. Set `SHADGT_FG_LOW_FPS_PACING=1` in the launcher's environment before starting the game to test it.
 
 The bundled Vulkan SDK clears its ten-sample pacing history whenever an interpolation interval exceeds 100 ms. Repeated slow frames can prevent that history from filling, reducing the intended spacing between generated and native frames to zero. This is a timing-history reset, not a hard generation cutoff at 24 FPS.
 

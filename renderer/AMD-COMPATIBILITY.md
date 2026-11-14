@@ -10,7 +10,7 @@ Existing published AMD family/driver profiles remain automatic. Do not enable al
 
 The local sampled-only candidate previously restored the skybox on Radeon 610M. The CI package must be rebuilt with this patch before its installed binaries contain the fix.
 
-Patch 0099 enables the validated composition and two post-processing fragment descriptor paths, plus the single-shader zero-copy 4 KiB compute prefix, automatically for Vulkan vendor ID 0x1002 (AMD). Other vendors retain the previous default. Existing RYGT_COMPOSITION_BUFFER_DESCRIPTORS, RYGT_POSTPROCESS_BUFFER_DESCRIPTORS and RYGT_COMPUTE_PREFIX_DESCRIPTOR overrides remain available: 0 disables, 1 enables. These are runtime binding choices; no shader interface or shader-store revision changes. Unsupported imports still use their existing fallback checks. Broad compute gathers and the unsuccessful material experiment remain off.
+Patch 0099 enables the validated composition and two post-processing fragment descriptor paths, plus the single-shader zero-copy 4 KiB compute prefix, automatically for Vulkan vendor ID 0x1002 (AMD). Other vendors retain the previous default. Existing SHADGT_COMPOSITION_BUFFER_DESCRIPTORS, SHADGT_POSTPROCESS_BUFFER_DESCRIPTORS and SHADGT_COMPUTE_PREFIX_DESCRIPTOR overrides remain available: 0 disables, 1 enables. These are runtime binding choices; no shader interface or shader-store revision changes. Unsupported imports still use their existing fallback checks. Broad compute gathers and the unsuccessful material experiment remain off.
 
 ## RX 6000 series and older (AMD-304/306/307/308/314)
 
@@ -19,7 +19,7 @@ AMD's older shader compiler (proprietary driver without LLPC in `driverInfo`: RX
 - AMD-306: pixel shaders keep whole quads in branches (`VK_KHR_shader_quad_control` with maximal reconvergence), so mip levels in branches match the PS4. `SHADGT_QUAD_CONTROL=0/1` overrides.
 - AMD-307: per-vertex reads find the driver's vertex order per triangle. `SHADGT_VERTEX_ORDER=0/1` overrides.
 - AMD-308: image float min/max atomics are built from integer atomics. `SHADGT_FP32_IMAGE_ATOMICS` overrides.
-- AMD-314: the KHR single-sample barycentric default is off there; `RYGT_AMD_SINGLE_SAMPLE_BARYCENTRIC=1` turns it on.
+- AMD-314: the KHR single-sample barycentric default is off there; `SHADGT_AMD_SINGLE_SAMPLE_BARYCENTRIC=1` turns it on.
 - AMD-315: GCN P1/P2 interpolation is done by hand on the explicit-vertex path, so a `V_INTERP_MOV` no longer turns other components' interpolated reads into vertex 0. `SHADGT_MANUAL_INTERP=0/1` overrides.
 - AMD-307's check uses locations 30/31 only when the vertex stage's exports leave them free (`SPI_VS_OUT_CONFIG`), and selects among the driver's raw vertices.
 - These cards use shader store 8, so older stores are replaced once.

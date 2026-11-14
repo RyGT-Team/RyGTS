@@ -16,11 +16,11 @@ int main() {
     const u8 magic[]{0xc7,0x87,0xdc,0x01,0,0,0x30,0x53,0x37,0x47};std::memcpy(base+0x68cf53,magic,sizeof magic);
     int errors=0;
     const char* values[]{"","0","0disabled","1","false"};
-    for(auto value:values){_putenv_s("RYGT_ADAPTIVE_TRIGGERS",value);*slot=original;g_telemetry_update=nullptr;
+    for(auto value:values){_putenv_s("SHADGT_ADAPTIVE_TRIGGERS",value);*slot=original;g_telemetry_update=nullptr;
         InstallTriggerTelemetry(base);const bool expected=value[0]!='0';
         const bool ok=expected?(*slot==&TelemetryUpdateHook && g_telemetry_update==original):(*slot==original && !g_telemetry_update);
-        std::printf("%s RYGT_ADAPTIVE_TRIGGERS='%s' hook=%d\n",ok?"PASS":"FAIL",value,*slot!=original);errors+=!ok;}
-    _putenv_s("RYGT_ADAPTIVE_TRIGGERS","");*slot=original;base[0x68cf53]=0;InstallTriggerTelemetry(base);
+        std::printf("%s SHADGT_ADAPTIVE_TRIGGERS='%s' hook=%d\n",ok?"PASS":"FAIL",value,*slot!=original);errors+=!ok;}
+    _putenv_s("SHADGT_ADAPTIVE_TRIGGERS","");*slot=original;base[0x68cf53]=0;InstallTriggerTelemetry(base);
     const bool rejected=*slot==original;std::printf("%s incompatible executable guard\n",rejected?"PASS":"FAIL");errors+=!rejected;
     VirtualFree(base,0,MEM_RELEASE);return errors?1:0;
 }

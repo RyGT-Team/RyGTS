@@ -2348,8 +2348,8 @@ namespace RyGT
             var shaderObjects = AddOption(shaders, "Shader objects (experimental)", "GPU", "shader_objects", false);
             shaderObjectTip.SetToolTip(shaderObjects, "Experimental: may cause rendering issues. Unavailable on AMD GPUs.");
             // FEAT-GTS-445 (from RyGT7's PERF-GT7-111/117 and PERF-GT7-108; RyGT-Team/rygt7#3): shader
-            // pre-translation (RYGT_MANIFEST_RECORD / RYGT_MANIFEST_PRETRANSLATE) and the compile pack
-            // (RYGT_COMPILE_PACK), both off unless checked.
+            // pre-translation (SHADGT_MANIFEST_RECORD / SHADGT_MANIFEST_PRETRANSLATE) and the compile pack
+            // (SHADGT_COMPILE_PACK), both off unless checked.
             AddOption(shaders, "Rebuild translated shaders in the background after a renderer update",
                       "GPU", "shader_pretranslate", false);
             AddOption(shaders, "Compile the shaders already seen on this PC at start, after a driver update (needs shader objects; may pause races)",
@@ -3345,7 +3345,7 @@ namespace RyGT
 
         // Renderer (GPU.native_renderer): the native renderer (the default; GT Sport's command
         // buffers recorded straight into Vulkan, faster in races) or the old renderer (shadGT's,
-        // with the direct memory renderer). RYGT_NATIVE=1 or =0 overrides the choice.
+        // with the direct memory renderer). SHADGT_NATIVE=1 or =0 overrides the choice.
         void AddRendererSetting(TableLayoutPanel panel)
         {
             var row = new FlowLayoutPanel { AutoSize = true, BackColor = Color.Transparent, Margin = new Padding(0, 2, 0, 4), WrapContents = false };
@@ -3366,14 +3366,31 @@ namespace RyGT
 
         // FEAT-GTS-469: like RPCS3's "Remove obsolete settings?", offer to drop config entries nothing
         // reads any more (ObsoleteSettings.cs). "Don't show again" is kept in RyGT.ini (prompt_obsolete).
+        // FEAT-GTS-275: and to rename the Advanced page's switches saved under a name the installed build no
+        // longer reads (RYGT_PARALLEL_WORKERS, now SHADGT_PARALLEL_WORKERS). Reading the modules takes
+        // a moment, so it runs off the window's thread.
         void PromptObsoleteSettings()
         {
             if (!settings.PromptObsolete) return;
             Dictionary<string, object> config;
             try { config = LoadConfig(); } catch { return; } // an unreadable config is reported where it is used
             var found = ObsoleteSettings.Find(config);
-            if (found.Count == 0) return;
-            using (var dialog = new ObsoleteSettingsDialog(found))
+            var saved = CustomEnvironment.Copy(settings.Env);
+            if (!SwitchWalker.HasSwitchNames(saved)) { AskObsoleteSettings(config, found, null); return; }
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                var renames = SwitchWalker.FindRenames(saved, SwitchWalker.KnownNames(root));
+                try { BeginInvoke((Action)delegate { AskObsoleteSettings(config, found, renames); }); }
+                catch (InvalidOperationException) { } // closed meanwhile
+            });
+        }
+
+        void AskObsoleteSettings(Dictionary<string, object> config, List<string> found, List<KeyValuePair<string, string>> renames)
+        {
+            var lines = new List<string>(found);
+            if (renames != null) lines.AddRange(renames.Select(r => r.Key + " - renamed to " + r.Value));
+            if (lines.Count == 0) return;
+            using (var dialog = new ObsoleteSettingsDialog(lines, renames != null && renames.Count > 0))
             {
                 var answer = dialog.ShowDialog(this);
                 if (dialog.DontShowAgain)
@@ -3385,11 +3402,15 @@ namespace RyGT
             }
             try
             {
-                ObsoleteSettings.Remove(config);
-                File.WriteAllText(ConfigPath, new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(config),
-                                  new UTF8Encoding(false));
+                if (found.Count > 0)
+                {
+                    ObsoleteSettings.Remove(config);
+                    File.WriteAllText(ConfigPath, new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(config),
+                                      new UTF8Encoding(false));
+                }
+                if (renames != null && SwitchWalker.Rename(settings.Env, renames) > 0) settings.Save();
             }
-            catch (Exception e) { MessageBox.Show(this, "Could not remove the obsolete settings: " + e.Message); }
+            catch (Exception e) { MessageBox.Show(this, "Could not update the obsolete settings: " + e.Message); }
         }
 
         // The native renderer is the default, but the renderer itself still falls back to the old one
@@ -4316,8 +4337,8 @@ namespace RyGT
                         RenderResolution.ConfigureStart(start, root, sceneSize);
                         start.EnvironmentVariables["RYGT_LOG_DIRECTORY"] = logDirectory;
                         start.EnvironmentVariables["RYGT_HDD_STREAMING"] = hddStreaming ? "1" : "0";
-                        start.EnvironmentVariables["RYGT_ANTI_LAG"] = antiLag ? "1" : "0"; // PERF-210
-                        start.EnvironmentVariables["RYGT_SHADER_OBJECT"] = shaderObjects ? "1" : "0";
+                        start.EnvironmentVariables["SHADGT_ANTI_LAG"] = antiLag ? "1" : "0"; // PERF-210
+                        start.EnvironmentVariables["SHADGT_SHADER_OBJECT"] = shaderObjects ? "1" : "0";
                         // FEAT-GTS-445 from the Shaders card. Pre-translation: each shader translation leaves
                         // a record (shaders\<serial>.manifest) and its code (shaders\<serial>.capture, this
                         // PC's only); at start, the ones the shader store lacks (after a renderer update)
@@ -4327,10 +4348,10 @@ namespace RyGT
                         // the Advanced page, applied below, still wins).
                         if (shaderPretranslate)
                         {
-                            start.EnvironmentVariables["RYGT_MANIFEST_RECORD"] = "1";
-                            start.EnvironmentVariables["RYGT_MANIFEST_PRETRANSLATE"] = "1";
+                            start.EnvironmentVariables["SHADGT_MANIFEST_RECORD"] = "1";
+                            start.EnvironmentVariables["SHADGT_MANIFEST_PRETRANSLATE"] = "1";
                         }
-                        if (compilePack) start.EnvironmentVariables["RYGT_COMPILE_PACK"] = "1";
+                        if (compilePack) start.EnvironmentVariables["SHADGT_COMPILE_PACK"] = "1";
                         // FEAT-GTS-433: the user's list last, so it wins; only the count is logged.
                         int custom = CustomEnvironment.Apply(start, customEnv);
                         if (custom > 0) AppendSetupLog(root, custom + " custom environment variable(s) applied.");

@@ -5,7 +5,7 @@ Apply shadGT-patches/0087-native-bounded-compute-prefix-descriptor.patch after t
 Opt-in before game startup:
 
 ```powershell
-$env:RYGT_COMPUTE_PREFIX_DESCRIPTOR = '1'
+$env:SHADGT_COMPUTE_PREFIX_DESCRIPTOR = '1'
 ```
 
 Unset it or set it to0 to restore the original compute path. The fragment descriptor switches documented in FRAGMENT-BUFFER-DESCRIPTORS.md remain independent.

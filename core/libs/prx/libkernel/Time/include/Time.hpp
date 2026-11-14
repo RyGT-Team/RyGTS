@@ -25,7 +25,7 @@ extern "C" {
 
 }
 
-// RYGT_DIAG=1: blocking waits, sleeps, contended mutexes and file reads are timed for the renderer's
+// SHARED_DIAG=1: blocking waits, sleeps, contended mutexes and file reads are timed for the renderer's
 // stutter diagnostics (libSceVideoOut.prx's RyGtDiagRecordNs). Zones as in shadGT's ryty_diag.h.
 enum class KernelDiagZone : std::uint32_t { Equeue = 50, Sema = 51, EventFlag = 52, Mutex = 53, Cond = 54, Sleep = 55, FileRead = 56, CondWoken = 57, EqueueWoken = 58 };
 bool KernelDiagEnabled();

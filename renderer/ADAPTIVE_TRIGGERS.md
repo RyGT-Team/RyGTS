@@ -8,7 +8,7 @@ The left trigger responds to estimated braking wheel slip. The right responds to
 
 Telemetry feedback is for player 1 only. Explicit game trigger commands take priority on each player's controller, including release commands. Telemetry expires after 250 ms without a new packet; menus, pause/loading flags and speeds below 3 m/s release the effects. Xbox rumble uses a 500 ms lease, refreshed every 250 ms. DualSense effects persist in hardware until released. Disconnect releases trigger effects and reconnect resets the output cache. Failed sends retry at most once per second.
 
-Set RYGT_ADAPTIVE_TRIGGERS=0 in the game's launch environment to disable the feature. Steam Input or another controller mapper may hide native DualSense effects or Xbox trigger-rumble capabilities.
+Set SHADGT_ADAPTIVE_TRIGGERS=0 in the game's launch environment to disable the feature. Steam Input or another controller mapper may hide native DualSense effects or Xbox trigger-rumble capabilities.
 
 ## Validation
 

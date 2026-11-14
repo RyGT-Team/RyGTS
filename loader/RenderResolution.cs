@@ -46,14 +46,14 @@ namespace RyGT
 
         public static void ConfigureStart(ProcessStartInfo start, string root, Size? scene)
         {
-            start.EnvironmentVariables.Remove("RYGT_EXPERIMENTAL_SCENE_VIEWPORT");
-            start.EnvironmentVariables.Remove("RYGT_SCENE_WIDTH");
-            start.EnvironmentVariables.Remove("RYGT_SCENE_HEIGHT");
+            start.EnvironmentVariables.Remove("SHADGT_EXPERIMENTAL_SCENE_VIEWPORT");
+            start.EnvironmentVariables.Remove("SHADGT_SCENE_WIDTH");
+            start.EnvironmentVariables.Remove("SHADGT_SCENE_HEIGHT");
             // Composition downscaling is an independent quality experiment, not an upscaler.
-            start.EnvironmentVariables.Remove("RYGT_LOW_RES_COMPOSITION");
+            start.EnvironmentVariables.Remove("SHADGT_LOW_RES_COMPOSITION");
             if (!scene.HasValue) return;
-            if (!String.IsNullOrEmpty(start.EnvironmentVariables["RYGT_PATCH"]))
-                throw new InvalidOperationException("Unset RYGT_PATCH before using launcher render scaling.");
+            if (!String.IsNullOrEmpty(start.EnvironmentVariables["SHADGT_PATCH"]))
+                throw new InvalidOperationException("Unset SHADGT_PATCH before using launcher render scaling.");
             Size size = scene.Value;
             byte[] pe = File.ReadAllBytes(Path.Combine(root, "GTSport.exe"));
             RequireSignature(pe, 0x1988ad3, "48b98007000038040000");
@@ -61,11 +61,11 @@ namespace RyGT
             RequireSignature(pe, 0x1988ab9, "8b0d6dea2301");
             string width = BitConverter.ToString(BitConverter.GetBytes(size.Width)).Replace("-", "").ToLowerInvariant();
             string height = BitConverter.ToString(BitConverter.GetBytes(size.Height)).Replace("-", "").ToLowerInvariant();
-            start.EnvironmentVariables["RYGT_PATCH"] = "1988ad3:48b98007000038040000:48b9" + width + height +
+            start.EnvironmentVariables["SHADGT_PATCH"] = "1988ad3:48b98007000038040000:48b9" + width + height +
                 ",1988ab0:8b0d72ea2301:b9" + width + "90,1988ab9:8b0d6dea2301:b9" + height + "90";
-            start.EnvironmentVariables["RYGT_EXPERIMENTAL_SCENE_VIEWPORT"] = "1";
-            start.EnvironmentVariables["RYGT_SCENE_WIDTH"] = size.Width.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            start.EnvironmentVariables["RYGT_SCENE_HEIGHT"] = size.Height.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            start.EnvironmentVariables["SHADGT_EXPERIMENTAL_SCENE_VIEWPORT"] = "1";
+            start.EnvironmentVariables["SHADGT_SCENE_WIDTH"] = size.Width.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            start.EnvironmentVariables["SHADGT_SCENE_HEIGHT"] = size.Height.ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
     }
 }

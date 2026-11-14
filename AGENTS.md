@@ -1,10 +1,39 @@
 # Notes for agents working on RyGTS
 
+## Switch names: SHADGT_, RYGT_ or SHARED_ (FEAT-GTS-275)
+
+From FEAT-GTS-275 on, an environment switch is named after where it takes effect:
+
+| Prefix | Read by | Example |
+|---|---|---|
+| `SHADGT_` | only the renderer (shadGT: `src/`, `ryty_gpu/`) | `SHADGT_PARALLEL_WORKERS` |
+| `RYGT_` | only the runtime (RyGTS: `core/`, `app/`, `plugins/`) | `RYGT_LOG_DIRECTORY` |
+| `SHARED_` | both the renderer and the runtime | `SHARED_DIAG` |
+
+- **A new switch** gets the prefix of the code that reads it. Never add a new `RYGT_` switch to the
+  renderer or a `SHADGT_` one to the runtime.
+- **A switch that starts being read on the other side too** is renamed to `SHARED_` in every
+  repository (renderer, runtime, launcher, docs), and added to `SHARED` in the renderer's
+  `tools/switch_prefix.py`.
+- **The rename is a hard one**: the old names are not read any more. At start the launchers list
+  switches saved under an old name in their obsolete-settings question and rename them on Yes
+  (`SwitchWalker.FindRenames`), so players keep their settings.
+- **A branch from before the rename** brings old names back on merge. Run the tool there after
+  merging; a second run changes nothing:
+
+  ```
+  python tools/switch_prefix.py --game gts --write-map switch-map.json .   # in shadGT
+  python <shadGT>/tools/switch_prefix.py --apply-map switch-map.json <RyGTS>   # the launcher and runtime
+  ```
+
+  It renames exact switch names only (not macros such as `RYGT_SWITCH_EXPORT`), in code, comments
+  and docs. `CHANGES.MD` and `CHANGELOG.md` keep the names of their time.
+
 ## Renderer switches on the launcher's Advanced page
 
-The launcher (`loader/`) does not keep a list of the renderer's `RYGT_*` and `SHADGT_*` switches. `SwitchWalker`
+The launcher (`loader/`) does not keep a list of the renderer's and runtime's `SHADGT_*`, `RYGT_*` and `SHARED_*` switches. `SwitchWalker`
 in `loader/AdvancedPage.cs` reads `libs\libSceVideoOut.prx` (the copy the game loads) as a file (it never loads it) and lists every
-`"RYGT_..."` and `"SHADGT_..."` string the renderer passes to `getenv`. Descriptions come from the same DLL:
+`"SHADGT_..."`, `"RYGT_..."` and `"SHARED_..."` string the renderer passes to `getenv`. Descriptions come from the same DLL:
 `"RYGTSW1|NAME|kind|group|default|values|description"` strings in shadGT's
 `src/video_core/rygt_switches.cpp`. See `loader/ADVANCED-PAGE.md`.
 
@@ -15,7 +44,7 @@ in `loader/AdvancedPage.cs` reads `libs\libSceVideoOut.prx` (the copy the game l
   found), so it is listed. Describe it in shadGT's `src/video_core/rygt_switches.cpp` like a renderer
   switch (group `Runtime` or the one that fits); the walker takes descriptions from any of the files.
 - **A variable the launcher sets itself** (`RYGT_LOG_DIRECTORY`, `RYGT_HDD_STREAMING`,
-  `RYGT_ANTI_LAG`, the render-scale ones in `loader/RenderResolution.cs`): add it to
+  `SHADGT_ANTI_LAG`, the render-scale ones in `loader/RenderResolution.cs`): add it to
   `SwitchWalker.LauncherManaged` so the page does not offer it.
 - **Changing the format:** bump the `RYGTSW1` tag on both sides together. The walker ignores strings
   with a tag it does not know.
