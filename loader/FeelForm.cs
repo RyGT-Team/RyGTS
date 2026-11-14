@@ -70,7 +70,7 @@ namespace RyGT
             var outer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, Padding = new Padding(18, 14, 18, 0) };
             outer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             Controls.Add(outer);
-            outer.Controls.Add(new Label { Text = "HD rumble & adaptive triggers", AutoSize = true, Font = new Font("Segoe UI Semibold", 16f), Margin = new Padding(0, 0, 0, 4) });
+            outer.Controls.Add(new Label { Text = "HD rumble & adaptive triggers", UseMnemonic = false, AutoSize = true, Font = new Font("Segoe UI Semibold", 16f), Margin = new Padding(0, 0, 0, 4) });
             outer.Controls.Add(new Label
             {
                 AutoSize = true, MaximumSize = new Size(720, 0), Margin = new Padding(0, 0, 0, 8),
