@@ -694,8 +694,8 @@ namespace RyGT
             var sections = new List<KeyValuePair<DataGridViewRow, string>>();
             var sectionStyle = new DataGridViewCellStyle
             {
-                BackColor = Dark.Field, SelectionBackColor = Dark.Field, ForeColor = Dark.AccentText, SelectionForeColor = Dark.AccentText,
-                Font = new Font("Segoe UI Semibold", 10f)
+                BackColor = Dark.Field, SelectionBackColor = Dark.Field, ForeColor = Color.White, SelectionForeColor = Color.White,
+                Font = new Font("Segoe UI Semibold", 10f, FontStyle.Italic)
             };
             // FEAT-GTS-274: switches of a group whose names share their first two words (SHADGT_PARALLEL_*) are
             // one family row, closed at first, instead of scattered through hundreds of rows.
