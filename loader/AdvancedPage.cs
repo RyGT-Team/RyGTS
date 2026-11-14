@@ -267,6 +267,28 @@ namespace RyGT
             }
         }
 
+        /// FEAT-GTS-277: the renderer's git describe ("gt7-2026-10-31-752-g817ddb6d"), from its
+        /// "RYGTREV1|describe|commit" string; null for a build without one.
+        public static string RendererDescription(string root)
+        {
+            try
+            {
+                byte[] data = File.ReadAllBytes(Path.Combine(root, RendererFile));
+                byte[] tag = Encoding.ASCII.GetBytes("RYGTREV1|");
+                for (int i = 0; i + tag.Length < data.Length; ++i)
+                {
+                    if (data[i] != tag[0] || !StartsWith(data, i, "RYGTREV1|")) continue;
+                    int end = i;
+                    while (end < data.Length && data[end] != 0 && end - i < 512) ++end;
+                    var fields = Encoding.ASCII.GetString(data, i, end - i).Split('|');
+                    if (fields.Length >= 3 && fields[1].Length > 0) return fields[1];
+                    if (fields.Length >= 3 && fields[2].Length >= 8) return fields[2].Substring(0, 8);
+                }
+            }
+            catch { }
+            return null;
+        }
+
         static bool IsSwitchName(string text)
         {
             if (!CustomEnvironment.IsValidName(text) || text.ToUpperInvariant() != text) return false;
@@ -474,6 +496,23 @@ namespace RyGT
             public readonly List<DataGridViewRow> Children = new List<DataGridViewRow>();
         }
 
+        /// FEAT-GTS-277: the header rows, in this order: the renderer's switches, the shared ones, the runtime's.
+        static readonly string[] SectionOrder = { "SHADGT_", "SHARED_", "RYGT_" };
+
+        static string SectionOf(string name)
+        {
+            foreach (var prefix in SectionOrder)
+                if (name.StartsWith(prefix, StringComparison.Ordinal)) return prefix;
+            return "RYGT_";
+        }
+
+        static string SectionTitle(string prefix)
+        {
+            return prefix == "SHADGT_" ? "Renderer  \u00B7  SHADGT_"
+                 : prefix == "SHARED_" ? "Renderer and runtime  \u00B7  SHARED_"
+                 : "Runtime  \u00B7  RYGT_";
+        }
+
         /// The first two words of a switch name with more after them (SHADGT_PARALLEL_X -> SHADGT_PARALLEL).
         static string FamilyPrefix(string name)
         {
@@ -501,7 +540,10 @@ namespace RyGT
             string rendererDate = "";
             try
             {
-                if (File.Exists(rendererPath))
+                // FEAT-GTS-277: the renderer's git describe; the file's date for a build without one.
+                string described = SwitchWalker.RendererDescription(root);
+                if (described != null) rendererDate = " \u00B7 renderer " + described;
+                else if (File.Exists(rendererPath))
                     rendererDate = " \u00B7 renderer from " + File.GetLastWriteTime(rendererPath).ToString("MM-dd HH:mm", CultureInfo.InvariantCulture);
             }
             catch { }
@@ -647,6 +689,14 @@ namespace RyGT
             };
             var rowSwitch = new Dictionary<DataGridViewRow, RendererSwitch>();
             var headings = new List<KeyValuePair<DataGridViewRow, string>>();
+            // FEAT-GTS-277: a header row per prefix, over that prefix's groups: the renderer's switches, the
+            // ones both read, then the runtime's.
+            var sections = new List<KeyValuePair<DataGridViewRow, string>>();
+            var sectionStyle = new DataGridViewCellStyle
+            {
+                BackColor = Dark.Field, SelectionBackColor = Dark.Field, ForeColor = Dark.AccentText, SelectionForeColor = Dark.AccentText,
+                Font = new Font("Segoe UI Semibold", 10f)
+            };
             // FEAT-GTS-274: switches of a group whose names share their first two words (SHADGT_PARALLEL_*) are
             // one family row, closed at first, instead of scattered through hundreds of rows.
             var families = new Dictionary<DataGridViewRow, SwitchFamily>(); // the family rows
@@ -682,16 +732,30 @@ namespace RyGT
                 Mark(row, current != null);
                 return row;
             };
-            foreach (var groupName in catalog.Select(c => c.Group).Distinct().ToList())
+            string lastSection = null;
+            var parts = catalog.Select(c => new { Section = SectionOf(c.Name), Group = c.Group }).Distinct()
+                               .OrderBy(x => Array.IndexOf(SectionOrder, x.Section)).ToList(); // stable: the groups keep their order
+            foreach (var part in parts)
             {
-                string group = groupName;
-                var members = catalog.Where(c => c.Group == group).ToList();
+                string section = part.Section, group = part.Group;
+                if (section != lastSection)
+                {
+                    lastSection = section;
+                    int at = grid.Rows.Add(SectionTitle(section), "", "");
+                    var header = grid.Rows[at];
+                    header.Tag = at;
+                    header.ReadOnly = true;
+                    header.DefaultCellStyle = sectionStyle;
+                    header.Height = 32;
+                    sections.Add(new KeyValuePair<DataGridViewRow, string>(header, section));
+                }
+                var members = catalog.Where(c => c.Group == group && SectionOf(c.Name) == section).ToList();
                 int h = grid.Rows.Add(group, "", "");
                 grid.Rows[h].Tag = h;
                 var heading = grid.Rows[h];
                 heading.ReadOnly = true;
                 heading.DefaultCellStyle = headingStyle;
-                headings.Add(new KeyValuePair<DataGridViewRow, string>(heading, group));
+                headings.Add(new KeyValuePair<DataGridViewRow, string>(heading, section + group));
                 var familyNames = new HashSet<string>(members.Select(c => FamilyPrefix(c.Name)).Where(f => f != null)
                                                              .GroupBy(f => f).Where(f => f.Count() >= 2).Select(f => f.Key));
                 var placed = new HashSet<string>();
@@ -760,7 +824,7 @@ namespace RyGT
                     bool visible = (showDiagnostics.Checked || !s.Diagnostic || changed) && (!onlyChanged.Checked || changed) &&
                                    (text.Length == 0 || s.Name.IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0 ||
                                     s.Tooltip.IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0);
-                    if (visible) { matched.Add(pair.Key); ++shown; visibleGroups.Add(s.Group); }
+                    if (visible) { matched.Add(pair.Key); ++shown; visibleGroups.Add(SectionOf(s.Name) + s.Group); visibleGroups.Add(SectionOf(s.Name)); }
                 }
                 // FEAT-GTS-274: a family's switches show while it is open (or searched, filtered or sorted);
                 // its row shows while any of them (or its own switch) matches.
@@ -775,6 +839,7 @@ namespace RyGT
                 foreach (var family in families.Values)
                     if (family.Switch == null) family.Row.Visible = sortColumn < 0 && family.Children.Any(matched.Contains);
                 foreach (var heading in headings) heading.Key.Visible = sortColumn < 0 && visibleGroups.Contains(heading.Value);
+                foreach (var header in sections) header.Key.Visible = sortColumn < 0 && visibleGroups.Contains(header.Value);
                 grid.ResumeLayout();
                 count.Text = walkError != null ? "Could not read " + SwitchWalker.RendererFile + ": " + walkError
                            : catalog.Count == 0 ? "No SHADGT_, RYGT_ or SHARED_ switches found in " + SwitchWalker.RendererFile
@@ -850,7 +915,7 @@ namespace RyGT
             // Every setting looks like what it is: an on/off switch as a toggle, any other switch (a number,
             // a mask, a name) as a text box, with the default in grey when empty.
             grid.RowTemplate.Height = 26;
-            foreach (DataGridViewRow row in grid.Rows) row.Height = 26;
+            foreach (DataGridViewRow row in grid.Rows) row.Height = sections.Any(x => x.Key == row) ? 32 : 26;
             grid.CellPainting += (sender, e) =>
             {
                 if (e.RowIndex < 0 || e.ColumnIndex != 1) return;
