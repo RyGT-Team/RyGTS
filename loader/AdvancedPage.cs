@@ -508,9 +508,9 @@ namespace RyGT
 
         static string SectionTitle(string prefix)
         {
-            return prefix == "SHADGT_" ? "Renderer  \u00B7  SHADGT_"
-                 : prefix == "SHARED_" ? "Renderer and runtime  \u00B7  SHARED_"
-                 : "Runtime  \u00B7  RYGT_";
+            return prefix == "SHADGT_" ? "Renderer"
+                 : prefix == "SHARED_" ? "Renderer and runtime"
+                 : "Runtime";
         }
 
         /// The first two words of a switch name with more after them (SHADGT_PARALLEL_X -> SHADGT_PARALLEL).
