@@ -6,6 +6,19 @@ The version lives in `loader/Version.cs`. To release a change, bump
 `LauncherVersion.Value` there and add a section here with the same number;
 CI fails when the two disagree.
 
+## 0.1.4 - 2026-11-13
+
+* FEAT-GTS-272: The launcher updates itself (from ryGT7's updater), on one of three channels
+  (Settings > About > Updates > "Update channel"): Stable, the newest GitHub release; Prerelease,
+  the newest release or prerelease; and Nightly (the default while RyGTS has no releases), the
+  newest successful build of development. At start ("Check for updates at start", on by default)
+  it asks GitHub for the newest build on the channel and, when it is not the installed one, the
+  home view offers it with an Update button. Nightlies are downloaded through nightly.link
+  (GitHub's own artifact download needs a signed-in account). The package is checked against its
+  SHA-256 and every file against its checksum list, and installed over the program files; the
+  game, saves, settings, profiles and caches are never touched. The replaced files are kept in
+  update\backup-<version> for Roll back.
+
 ## 0.1.3 - 2026-11-13
 
 * FEAT-GTS-271: The Advanced page also lists the runtime's switches (libkernel, libc,

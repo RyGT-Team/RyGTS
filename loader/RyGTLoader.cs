@@ -915,6 +915,18 @@ namespace RyGT
         readonly GlowButton[] buttons;
         public Image Logo;
         public string Title = "", Accent = "", Caption = "", Status = "", Version = "";
+        /// FEAT-GTS-272: the updater's notice (a newer build) at the top right, above its Update button.
+        public string Notice = "";
+        public GlowButton UpdateButton;
+        const int NoticeTop = 30, NoticeWidth = 420;
+        int NoticeHeight
+        {
+            get
+            {
+                return Notice.Length == 0 ? 0 : TextRenderer.MeasureText(Notice, Font, new Size(NoticeWidth, 400),
+                                                                         TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height;
+            }
+        }
         readonly Dictionary<int, Bitmap> scaled = new Dictionary<int, Bitmap>();
         Size scaledFor;
         Bitmap overlay, frame;
@@ -1065,6 +1077,8 @@ namespace RyGT
                 button.Location = new Point(x, ButtonsTop);
                 x += button.Width + Gap;
             }
+            if (UpdateButton != null)
+                UpdateButton.Location = new Point(Width - UpdateButton.Width - 30, NoticeTop + NoticeHeight + 14);
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -1108,6 +1122,14 @@ namespace RyGT
             // The status under the buttons, the version at the bottom right.
             TextRenderer.DrawText(g, Status, Font, new Rectangle(Left_ + 2, top + buttons[0].Height + 12, Math.Max(100, Width - Left_ - 260), 40),
                                   Color.FromArgb(200, 204, 212), TextFormatFlags.NoPrefix | TextFormatFlags.WordBreak);
+            if (Notice.Length > 0)
+            {
+                var box = new Rectangle(Width - NoticeWidth - 30, NoticeTop, NoticeWidth, NoticeHeight);
+                using (var shade = new SolidBrush(Color.FromArgb(150, 10, 11, 14)))
+                    g.FillRectangle(shade, Rectangle.Inflate(box, 12, 10));
+                TextRenderer.DrawText(g, Notice, Font, box, Color.FromArgb(226, 230, 238),
+                                      TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.Right);
+            }
             var versionFont = Dark.Caps(9f);
             var versionSize = TextRenderer.MeasureText(Version, versionFont);
             TextRenderer.DrawText(g, Version, versionFont, new Point(Width - versionSize.Width - 30, Height - versionSize.Height - 24),
@@ -1606,6 +1628,8 @@ namespace RyGT
         // Home: the picture over the whole window with the title, Play and the settings button.
         // Settings: a sidebar of categories and their pages.
         readonly HomeView home;
+        readonly GlowButton updateButton; // FEAT-GTS-272
+        ReleaseInfo pendingUpdate;
         readonly Panel settingsView, pagesHost, sidebar;
         readonly Curtain curtain;
         readonly Dictionary<string, Panel> pages = new Dictionary<string, Panel>();
@@ -1644,8 +1668,15 @@ namespace RyGT
             {
                 Dock = DockStyle.Fill, Logo = logoImage, Title = "GRAN TURISMO", Accent = "SPORT",
                 Caption = Dark.Spaced("CUSA03220   " + (char)183 + "   UPDATE 1.69   " + (char)183 + "   RYGTS FOR WINDOWS"),
-                Version = "RyGTS " + LauncherVersion.Value + "  " + (char)183 + "  GT Sport 1.69 " + (char)183 + " CUSA03220"
+                Version = "RyGTS " + LauncherVersion.Value + (Updater.InstalledVersion(root) == null ? "" : " (" + Updater.Display(Updater.InstalledVersion(root)) + ")") +
+                          "  " + (char)183 + "  GT Sport 1.69 " + (char)183 + " CUSA03220"
             };
+            // FEAT-GTS-272: the update button, shown when a newer build is found; leftovers of an update go.
+            Updater.CleanUp(root);
+            updateButton = new GlowButton { Text = "Update", Size = new Size(230, 40), Font = Dark.Caps(10f), Visible = false };
+            updateButton.Click += delegate { InstallUpdate(); };
+            home.UpdateButton = updateButton;
+            home.Controls.Add(updateButton);
             curtain = new Curtain { Dock = DockStyle.Fill, Visible = false };
             Controls.Add(curtain);
             Controls.Add(settingsView);
@@ -2347,6 +2378,10 @@ namespace RyGT
                 catch (Exception e) { MessageBox.Show(this, "Could not save the setting: " + e.Message); }
             };
 
+            // ---- About > Updates (FEAT-GTS-272): the check at start, the channel, Check now and Roll back
+            var updates = Section(aboutPage, "Updates");
+            AddUpdateSettings(updates);
+
             // ---- About > Logging, and whether the Advanced page shows
             var logging = Section(aboutPage, "Logging");
             var logLevel = new DarkComboBox { Width = 230, DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat };
@@ -2444,8 +2479,172 @@ namespace RyGT
             {
                 ActiveControl = play.Enabled ? (Control)play : gear;
                 BeginInvoke((MethodInvoker)PromptObsoleteSettings); // once the window is up
+                if (ReadSetting("Launcher", "check_updates", true)) CheckForUpdate(false); // FEAT-GTS-272
             };
             RefreshState();
+        }
+
+        /// FEAT-GTS-272: the update channel (Launcher.update_channel): stable (the newest release), prerelease
+        /// (the newest release or pre-release) or nightly (the newest build of development). Nightly by default.
+        string UpdateChannel()
+        {
+            try
+            {
+                object section, value;
+                var launcher = LoadConfig().TryGetValue("Launcher", out section) ? section as Dictionary<string, object> : null;
+                string channel = launcher != null && launcher.TryGetValue("update_channel", out value) ? value as string : null;
+                return Array.IndexOf(Updater.Channels, channel) >= 0 ? channel : Updater.Nightly;
+            }
+            catch { return Updater.Nightly; }
+        }
+
+        static string ChannelName(string channel)
+        {
+            return channel == Updater.Nightly ? "nightly" : channel == Updater.Prerelease ? "release or prerelease" : "stable release";
+        }
+
+        /// Asks GitHub for the newest build on the update channel in the background; never holds up Play.
+        void CheckForUpdate(bool manual)
+        {
+            string installed = Updater.InstalledVersion(root);
+            if (installed == null)
+            {
+                if (manual) MessageBox.Show(this, "This launcher didn't come from a RyGTS package (it has no manifest.json or BUILD_INFO.txt), so it can't update itself.");
+                return;
+            }
+            string channel = UpdateChannel();
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                ReleaseInfo latest = null;
+                Exception error = null;
+                try { latest = Updater.Latest(channel); }
+                catch (Exception e) { error = e; }
+                try { BeginInvoke((Action)delegate { ShowUpdate(installed, channel, latest, error, manual); }); }
+                catch (InvalidOperationException) { } // closed meanwhile
+            });
+        }
+
+        void ShowUpdate(string installed, string channel, ReleaseInfo latest, Exception error, bool manual)
+        {
+            if (channel != UpdateChannel()) return; // the channel changed meanwhile; that check shows its own
+            if (latest != null && Updater.IsNewer(latest.Version, installed))
+            {
+                pendingUpdate = latest;
+                home.Notice = (latest.Artifact ? "A newer RyGTS nightly is available: " + Updater.Display(latest.Version)
+                                               : "RyGTS " + latest.Version + (latest.Prerelease ? " (prerelease)" : "") + " is available") +
+                              " (you have " + Updater.Display(installed) + ")." + Environment.NewLine + latest.Summary(240);
+                updateButton.Text = "Update to " + Updater.Display(latest.Version);
+                updateButton.Visible = true;
+                home.PerformLayout();
+                home.Invalidate(true);
+            }
+            else if (manual)
+            {
+                MessageBox.Show(this, error != null ? "Could not check for updates: " + error.Message
+                                    : latest == null && channel == Updater.Nightly ? "No nightly to update to was found (nightlies are kept for 7 days)."
+                                    : latest == null ? "No RyGTS " + ChannelName(channel) + " was found on GitHub."
+                                    : "RyGTS " + Updater.Display(installed) + " is the newest " + ChannelName(channel) + ".");
+            }
+        }
+
+        void ClearUpdate()
+        {
+            pendingUpdate = null;
+            home.Notice = "";
+            updateButton.Visible = false;
+            home.PerformLayout();
+            home.Invalidate(true);
+        }
+
+        /// Downloads and installs the pending update, then restarts the launcher.
+        void InstallUpdate()
+        {
+            var release = pendingUpdate;
+            if (release == null || busy) return;
+            if (MessageBox.Show(this, "Update RyGTS to " + Updater.Display(release.Version) + (release.Prerelease ? " (prerelease)" : "") + "?" +
+                                Environment.NewLine + Environment.NewLine +
+                                "The launcher downloads " + release.ZipName +
+                                (release.Artifact ? " (through nightly.link, as GitHub's own download needs an account)" : "") +
+                                ", checks it, replaces its own program files and restarts. Your game, saves, settings, profiles and shader " +
+                                "caches stay as they are. The old files are kept, so you can roll back from Settings > About.", "Update RyGTS",
+                                MessageBoxButtons.OKCancel) != DialogResult.OK)
+                return;
+            busy = true;
+            updateButton.Enabled = false;
+            play.Enabled = false;
+            string last = null;
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                Exception error = null;
+                try
+                {
+                    Updater.Install(root, release, (text, fraction) =>
+                    {
+                        if (text == last) return;
+                        last = text;
+                        BeginInvoke((Action)delegate { status.Text = text; });
+                    });
+                }
+                catch (Exception e) { error = e; }
+                BeginInvoke((Action)delegate
+                {
+                    busy = false;
+                    if (error == null) { Updater.Restart(root); return; }
+                    updateButton.Enabled = true;
+                    RefreshState();
+                    status.Text = "The update failed: " + error.Message;
+                    MessageBox.Show(this, "The update failed, and the launcher's files are as they were." + Environment.NewLine + error.Message);
+                });
+            });
+        }
+
+        /// Launcher updates: the check at start, the channel, a check now, and a roll back of the last update.
+        void AddUpdateSettings(TableLayoutPanel panel)
+        {
+            AddOption(panel, "Check for updates at start", "Launcher", "check_updates", true);
+            var channelRow = new FlowLayoutPanel { AutoSize = true, BackColor = Color.Transparent, Margin = new Padding(0, 4, 0, 2), WrapContents = false };
+            var channelLabel = new Label { Text = "Update channel", AutoSize = false, Width = 196, Height = 20, BackColor = Color.Transparent, Margin = new Padding(0, 6, 8, 0) };
+            var channelBox = new DarkComboBox { Width = 230, DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat };
+            channelBox.Items.AddRange(new object[] { "Stable", "Prerelease", "Nightly" });
+            channelBox.SelectedIndex = Array.IndexOf(Updater.Channels, UpdateChannel());
+            channelBox.SelectedIndexChanged += delegate
+            {
+                try { WriteSetting("Launcher", "update_channel", Updater.Channels[channelBox.SelectedIndex]); }
+                catch (Exception e) { MessageBox.Show(this, "Could not save the setting: " + e.Message); return; }
+                // What was found on the old channel no longer applies.
+                ClearUpdate();
+                if (ReadSetting("Launcher", "check_updates", true)) CheckForUpdate(false);
+            };
+            channelRow.Controls.Add(channelLabel);
+            channelRow.Controls.Add(channelBox);
+            panel.Controls.Add(channelRow);
+            var row = new FlowLayoutPanel { AutoSize = true, BackColor = Color.Transparent, Margin = new Padding(0, 4, 0, 2), WrapContents = false };
+            string installed = Updater.InstalledVersion(root);
+            var label = new Label
+            {
+                Text = "Launcher " + LauncherVersion.Value + (installed == null ? "" : " (" + Updater.Display(installed) + ")"),
+                AutoSize = false, Width = 196, Height = 20, BackColor = Color.Transparent, Margin = new Padding(0, 6, 8, 0)
+            };
+            var check = new Button { Text = "Check now", AutoSize = true, Margin = new Padding(0, 0, 6, 0) };
+            check.Click += delegate { CheckForUpdate(true); };
+            var last = Updater.LastUpdate(root);
+            var rollBack = new Button { Text = last == null ? "Roll back" : "Roll back to " + Updater.Display(last.Item2), AutoSize = true, Enabled = last != null, Margin = new Padding(0) };
+            rollBack.Click += delegate
+            {
+                if (busy) return;
+                if (MessageBox.Show(this, "Put back RyGTS " + Updater.Display(last.Item2) + " (as before the update to " + Updater.Display(last.Item3) +
+                                    ") and restart the launcher?", "Roll back", MessageBoxButtons.OKCancel) != DialogResult.OK)
+                    return;
+                try { Updater.RollBack(root); Updater.Restart(root); }
+                catch (Exception e) { MessageBox.Show(this, "Could not roll back: " + e.Message); }
+            };
+            row.Controls.Add(label);
+            row.Controls.Add(check);
+            row.Controls.Add(rollBack);
+            panel.Controls.Add(row);
+            panel.Controls.Add(Hint("Stable is the newest release on GitHub, Prerelease the newest release or prerelease, and Nightly " +
+                                    "the newest build of development (downloaded through nightly.link; nightlies are kept for 7 days). " +
+                                    "No GitHub account is needed. Your game, saves, settings and caches are never touched."));
         }
 
         /// The sidebar's page list, top to bottom, leaving out hidden pages (Advanced when it is off).
