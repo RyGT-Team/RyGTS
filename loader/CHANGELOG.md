@@ -8,6 +8,10 @@ CI fails when the two disagree.
 
 ## 0.1.7 - 2026-11-13
 
+* FEAT-GTS-279: Graphics > Enhancements: PS4 Pro mode is a dropdown of the renderer's modes, Off
+  (PS4), PS4 Pro 1080p TV and PS4 Pro 4K TV (GPU.ps4_pro_mode), instead of an on/off box that only
+  reached the 1080p one. The launcher sets SHADGT_PS4_PRO to match, so the Advanced page no longer
+  lists it. A config with the old box ticked reads as PS4 Pro 1080p, as it ran.
 * FEAT-GTS-278: The Advanced page's headers (Renderer, Renderer and runtime, Runtime) and group subheaders
   close and open with a click (or Left, Right and Space), an arrow showing which. They start open;
   searching or "Only changed" shows the matches under closed ones, and Refresh and Load keep them.

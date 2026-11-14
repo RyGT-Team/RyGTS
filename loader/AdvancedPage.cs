@@ -84,7 +84,8 @@ namespace RyGT
         static readonly HashSet<string> LauncherManaged = new HashSet<string>
         {
             "RYGT_LOG_DIRECTORY", "RYGT_HDD_STREAMING", "SHADGT_ANTI_LAG", "SHADGT_PATCH", "SHADGT_EXPERIMENTAL_SCENE_VIEWPORT",
-            "SHADGT_SCENE_WIDTH", "SHADGT_SCENE_HEIGHT", "SHADGT_LOW_RES_COMPOSITION"
+            "SHADGT_SCENE_WIDTH", "SHADGT_SCENE_HEIGHT", "SHADGT_LOW_RES_COMPOSITION",
+            "SHADGT_PS4_PRO" // FEAT-GTS-279: the Graphics page's PS4 Pro mode
         };
 
         static readonly string[] GroupOrder =

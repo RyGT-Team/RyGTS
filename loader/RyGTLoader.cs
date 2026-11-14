@@ -2325,7 +2325,7 @@ namespace RyGT
 
             var extras = Section(graphicsPage, "Enhancements");
             AddOption(extras, "Disable motion blur", "GPU", "disable_motion_blur", false);
-            AddOption(extras, "PS4 Pro Mode (BROKEN)", "GPU", "ps4_pro", false);
+            AddProMode(extras); // FEAT-GTS-279
             uiHiresBox = AddOption(extras, "Draw the UI at screen resolution", "GPU", "ui_hires", false);
             AddOption(extras, "HDR (experimental; needs Windows HDR on)", "GPU", "hdr_allowed", false);
 
@@ -3470,6 +3470,40 @@ namespace RyGT
 
         Size? experimentalSceneSize;
 
+        // FEAT-GTS-279: the PS4 Pro mode the game sees, as the renderer offers it (SHADGT_PS4_PRO): off (a
+        // base PS4), a Pro on a 1080p TV, or a Pro on a 4K TV. GPU.ps4_pro_mode keeps the choice
+        // ("off", "1080", "4k"); GPU.ps4_pro stays true for either Pro mode, as the renderer reads it
+        // too. A config from before, with only GPU.ps4_pro on, is the 1080p mode it ran as.
+        static readonly string[] ProModes = { "off", "1080", "4k" };
+
+        string ProMode()
+        {
+            string mode = ReadStringSetting("GPU", "ps4_pro_mode", "");
+            if (Array.IndexOf(ProModes, mode) >= 0) return mode;
+            return ReadSetting("GPU", "ps4_pro", false) ? "1080" : "off";
+        }
+
+        void AddProMode(TableLayoutPanel panel)
+        {
+            var row = new FlowLayoutPanel { AutoSize = true, BackColor = Color.Transparent, Margin = new Padding(0, 4, 0, 2), WrapContents = false };
+            var label = new Label { Text = "PS4 Pro mode (BROKEN)", AutoSize = false, Width = 196, Height = 20, BackColor = Color.Transparent, Margin = new Padding(0, 6, 8, 0) };
+            var mode = new DarkComboBox { Width = 230, DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, AccessibleName = "PS4 Pro mode" };
+            mode.Items.AddRange(new object[] { "Off (PS4)", "PS4 Pro, 1080p TV", "PS4 Pro, 4K TV" });
+            mode.SelectedIndex = Array.IndexOf(ProModes, ProMode());
+            mode.SelectedIndexChanged += delegate
+            {
+                try
+                {
+                    WriteSetting("GPU", "ps4_pro_mode", ProModes[mode.SelectedIndex]);
+                    WriteSetting("GPU", "ps4_pro", mode.SelectedIndex != 0);
+                }
+                catch (Exception e) { MessageBox.Show(this, "Could not save the setting: " + e.Message); }
+            };
+            row.Controls.Add(label);
+            row.Controls.Add(mode);
+            panel.Controls.Add(row);
+        }
+
         void ApplyExperimentalRenderScale()
         {
             experimentalSceneSize = null;
@@ -4294,7 +4328,7 @@ namespace RyGT
                                    !ReadSetting("GPU", "dlssg_enabled", false);
                     bool shaderObjects = ReadSetting("GPU", "shader_objects", false);
                     StartGame(root, settings.HddStreaming, experimentalSceneSize, antiLag, shaderObjects,
-                              ReadSetting("GPU", "shader_pretranslate", false), ReadSetting("GPU", "compile_pack", false),
+                              ReadSetting("GPU", "shader_pretranslate", false), ReadSetting("GPU", "compile_pack", false), ProMode(),
                               CustomEnvironment.Copy(settings.Env));
                     status.Text = "GT Sport is starting. Logs: logs\\stdout.log and logs\\stderr.log.";
                 }));
@@ -4305,7 +4339,8 @@ namespace RyGT
 
         /// Starts GTSport.exe with session log rotation and waits for GPU recovery if Vulkan loses
         /// its device.
-        static void StartGame(string root, bool hddStreaming, Size? sceneSize, bool antiLag, bool shaderObjects, bool shaderPretranslate, bool compilePack, List<EnvVar> customEnv)
+        static void StartGame(string root, bool hddStreaming, Size? sceneSize, bool antiLag, bool shaderObjects, bool shaderPretranslate, bool compilePack, string proMode,
+                              List<EnvVar> customEnv)
         {
             string exe = Path.Combine(root, "GTSport.exe");
             // Preserve GT Sport metadata while migrating the launcher publisher field from older installs.
@@ -4352,6 +4387,8 @@ namespace RyGT
                             start.EnvironmentVariables["SHADGT_MANIFEST_PRETRANSLATE"] = "1";
                         }
                         if (compilePack) start.EnvironmentVariables["SHADGT_COMPILE_PACK"] = "1";
+                        // FEAT-GTS-279: the PS4 Pro mode picked on the Graphics page.
+                        start.EnvironmentVariables["SHADGT_PS4_PRO"] = proMode == "4k" ? "2160" : proMode == "1080" ? "1080" : "0";
                         // FEAT-GTS-433: the user's list last, so it wins; only the count is logged.
                         int custom = CustomEnvironment.Apply(start, customEnv);
                         if (custom > 0) AppendSetupLog(root, custom + " custom environment variable(s) applied.");
