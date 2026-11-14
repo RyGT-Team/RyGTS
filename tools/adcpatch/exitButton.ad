@@ -1,9 +1,11 @@
 // ryGT: SystemMenu::ExitButton for COMPONENTS.ADC (v1.69). The Top Screen's GT menu has an Exit
 // item ("Close this mode and return to the Top Screen") that the game greys out there: you are
-// already on the Top Screen, and a PS4 game does not close itself. On PC it saves the game and
-// closes it instead, through the game's own exit (the main loop's ExitGame, as when the game's
-// rights check fails). In the game modes, where Exit returns to the Top Screen, the button is not
-// greyed out and the menu's own handler (SystemMenu::AppMenu's alias_Exit) stays as it is.
+// already on the Top Screen, and a PS4 game does not close itself. On PC it saves the game, waits
+// for the save to finish and closes the game, through the game's own exit (the main loop's
+// ExitGame, as when the game's rights check fails). The renderer ends the process when the game's
+// main returns (shadGT EXIT-001). In the game modes, where Exit returns to the Top Screen, the
+// button is not greyed out and the menu's own handler (SystemMenu::AppMenu's alias_Exit) stays
+// as it is.
 module SystemMenu::ExitButton
 {
     method onInitialize(context)
@@ -21,7 +23,20 @@ module SystemMenu::ExitButton
     method quitGame(context)
     {
         sound.play("ok");
+        // The game's saves run in the background. SaveData::getResult (the save file) and
+        // SaveData::getSaveResultLocal (the local data) wait for the one in progress and return
+        // its result: first for a save that is still running (after a race, say), then for
+        // this one. The game only closes when both were written.
+        FunctionManager::call("SaveData::getResult");
+        FunctionManager::call("SaveData::getSaveResultLocal");
         FunctionManager::call("SaveData::saveGame");
+        var ok = main::pdiext::SaveDataError::SAVEDATA_OK;
+        if (FunctionManager::call("SaveData::getResult") != ok ||
+            FunctionManager::call("SaveData::getSaveResultLocal") != ok)
+        {
+            // Not saved: stay in the game.
+            return 2;
+        }
         // The shutdown (main's execShutdown) finalizes the online service through
         // Grim3.clearCallback, which this build of the game does not have: a fatal script error
         // after the save. Offline there is nothing to finalize, so the shutdown skips it.
