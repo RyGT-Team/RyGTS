@@ -10,7 +10,8 @@ CI fails when the two disagree.
 
 * FEAT-GTS-274: On the Advanced page, switches of a group whose names share their first two words
   (RYGT_PARALLEL_*, RYGT_NATIVE_*, SHADGT_DIAG_*, ...) sit under one family row, closed at first,
-  instead of scattered through the list. The row shows how many switches it holds and how many are
+  instead of scattered through the list; in each group the families come first, then the other
+  switches. The row shows how many switches it holds and how many are
   changed; a click anywhere on it opens or closes it, except on the row's own switch when the
   family is named after one (RYGT_NATIVE), which still flips as usual. Right and Left open and
   close it from the keyboard. Searching or "Only changed" opens the families with a match, and a

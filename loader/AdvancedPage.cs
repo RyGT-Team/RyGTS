@@ -554,11 +554,12 @@ namespace RyGT
                 var familyNames = new HashSet<string>(members.Select(c => FamilyPrefix(c.Name)).Where(f => f != null)
                                                              .GroupBy(f => f).Where(f => f.Count() >= 2).Select(f => f.Key));
                 var placed = new HashSet<string>();
+                var standalone = new List<RendererSwitch>(); // after the families
                 foreach (var sw in members)
                 {
                     string prefix = FamilyPrefix(sw.Name);
                     string key = prefix != null && familyNames.Contains(prefix) ? prefix : familyNames.Contains(sw.Name) ? sw.Name : null;
-                    if (key == null) { addSwitch(sw); continue; }
+                    if (key == null) { standalone.Add(sw); continue; }
                     if (!placed.Add(key)) continue; // already under its family's row
                     var family = new SwitchFamily { Prefix = key, Key = group + "|" + key, Switch = members.FirstOrDefault(c => c.Name == key) };
                     family.Expanded = expanded.Contains(family.Key);
@@ -586,6 +587,7 @@ namespace RyGT
                         familyOf[row] = family;
                     }
                 }
+                foreach (var lone in standalone) addSwitch(lone);
             }
             loading = false;
             card.Controls.Add(grid);
